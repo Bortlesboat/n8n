@@ -18,6 +18,7 @@ import type { SerializedFolder } from '../../spec/serialized/folder.schema';
 import type { SerializedProject } from '../../spec/serialized/project.schema';
 import type { SerializedVariable } from '../../spec/serialized/variable.schema';
 import type { SerializedWorkflowMetadata } from '../../spec/serialized/workflow-metadata.schema';
+import type { SerializedCredential } from '../../spec/serialized/credential.schema';
 import type { SerializedWorkflow } from '../../spec/serialized/workflow.schema';
 import { streamToBuffer } from '../utils/tar-support';
 
@@ -232,6 +233,7 @@ export async function buildImportPackageBuffer(
 		sourceId?: string;
 		/** Replaces every metadata file, or leaves it out, so tests can drive the rejections. */
 		workflowMetadata?: 'omit' | Record<string, unknown>;
+		credentials?: SerializedCredential[];
 	} = {},
 ): Promise<Buffer> {
 	const writer = new TarPackageWriter();
@@ -247,6 +249,15 @@ export async function buildImportPackageBuffer(
 			name: w.name,
 			target: `workflows/wf-${idx}`,
 		})),
+		...(options.credentials?.length
+			? {
+					credentials: options.credentials.map((credential, idx) => ({
+						id: credential.id,
+						name: credential.name,
+						target: `credentials/cred-${idx}`,
+					})),
+				}
+			: {}),
 		...options.manifestExtras,
 	};
 
@@ -273,6 +284,10 @@ export async function buildImportPackageBuffer(
 				JSON.stringify(options.workflowMetadata ?? metadata),
 			);
 		}
+	});
+	(options.credentials ?? []).forEach((credential, idx) => {
+		writer.writeDirectory(`credentials/cred-${idx}`);
+		writer.writeFile(`credentials/cred-${idx}/credential.json`, JSON.stringify(credential));
 	});
 
 	return await streamToBuffer(writer.finalize());

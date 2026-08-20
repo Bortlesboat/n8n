@@ -255,6 +255,7 @@ properties:
     required:
       - matched
       - stubbed
+      - seeded
     properties:
       matched:
         type: array
@@ -270,6 +271,13 @@ properties:
         description: >
           Source credential ids for which empty placeholder
           credentials were created in the target project.
+      seeded:
+        type: array
+        items:
+          type: string
+        description: >
+          Source credential ids for which credentials were created
+          with bundled expression values in the target project.
   dataTables:
     type: object
     required:
