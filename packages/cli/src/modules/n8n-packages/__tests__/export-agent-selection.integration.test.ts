@@ -24,10 +24,6 @@ import {
 	PackageEntityNotFoundError,
 	PackageExportBlockedError,
 } from '../entities/package-export.errors';
-import { AutoIncludedWorkflowResolver } from '../entities/workflow/auto-included-workflow-resolver';
-import { assertStaticSubWorkflowsIncluded } from '../entities/workflow/static-sub-workflow-requirements';
-import { WorkflowDependencyResolver } from '../entities/workflow/workflow-dependency-resolver';
-import { WorkflowRequirementExporter } from '../entities/workflow/workflow-requirement.exporter';
 import { CapturingWriter } from '../io/__tests__/utils/capturing-writer';
 import { N8nPackagesService } from '../n8n-packages.service';
 import { serializedAgentSchema } from '../spec/serialized/agent.schema';
@@ -113,7 +109,7 @@ async function publish(agent: Agent) {
 }
 
 it.each(['loose', 'project'] as const)(
-	'selects a %s dependency graph without repeating Agents',
+	'exports a %s selection with Agent and workflow cycles',
 	async (placement) => {
 		const user = await createMember();
 		await linkUserToProject(user, project, 'project:viewer');
@@ -125,6 +121,8 @@ it.each(['loose', 'project'] as const)(
 		await linkUserToProject(user, otherProject, dependencyRole.slug);
 		await createFolder(otherProject, { name: 'Unrelated folder' });
 		await setConfig(parent, {
+			model: 'openai/gpt-4o',
+			credential: 'missing-model',
 			subAgents: { agents: [{ agentId: child.id, enabled: false }, { agentId: child.id }] },
 			tools: [
 				{ type: 'workflow', workflowId: parent.id, workflow: 'Display name', enabled: false },
@@ -137,45 +135,61 @@ it.each(['loose', 'project'] as const)(
 			projectId: otherProject.id,
 			schema: null,
 		});
+		const folder = await createFolder(project, { name: 'Selected folder' });
 		const nested = await createWorkflow(
-			{ id: 'nested', nodes: [executeWorkflowNode(parent.id)] },
+			{ id: 'nested', nodes: [executeWorkflowNode(parent.id)], parentFolder: folder },
 			project,
 		);
-		await createWorkflow({ id: parent.id, nodes: [executeWorkflowNode(nested.id)] }, otherProject);
-		const result = await exporter.export({
-			user,
-			writer: new CapturingWriter(),
-			...(placement === 'project'
-				? { projectIds: [project.id] }
-				: { agentIds: [parent.id, parent.id], workflowIds: [nested.id] }),
-			missingAgentDependencyPolicy: 'include-in-package',
+		const loose = await createWorkflow({ id: 'loose', nodes: [] }, project);
+		await createWorkflow(
+			{
+				id: parent.id,
+				name: 'Agent workflow',
+				nodes: [executeWorkflowNode(nested.id)],
+				settings: { errorWorkflow: nested.id },
+			},
+			otherProject,
+		);
+		await createWorkflow({ id: 'unrelated-workflow', nodes: [] }, otherProject);
+		const { manifest, counts } = await Container.get(N8nPackagesService).exportPackageToWriter(
+			{
+				user,
+				...(placement === 'project'
+					? { projectIds: [project.id] }
+					: { agentIds: [parent.id, parent.id], workflowIds: [loose.id], folderIds: [folder.id] }),
+				includeTags: false,
+				missingAgentDependencyPolicy: 'include-in-package',
+				missingWorkflowDependencyPolicy: 'include-in-package',
+			},
+			new CapturingWriter(),
+		);
+		expect(manifest.agents?.map(({ id }) => id)).toEqual([parent.id, child.id]);
+		expect(counts).toMatchObject({ agents: 2, workflows: 3 });
+		expect(manifest.workflows?.map(({ id }) => id).sort()).toEqual(
+			['loose', 'nested', parent.id].sort(),
+		);
+		expect(manifest.requirements?.credentials).toEqual([
+			{ id: 'missing-model', usedBy: [{ kind: 'agent', id: parent.id }] },
+		]);
+		expect(manifest.requirements?.workflows).toContainEqual({
+			id: parent.id,
+			name: 'Agent workflow',
+			usedBy: [
+				{ kind: 'agent', id: parent.id },
+				{ kind: 'workflow', id: nested.id },
+			],
 		});
-		expect(result.agentIds).toEqual([parent.id, child.id]);
-		expect(result.counts.agents).toBe(2);
-		expect(result.projectEntries.map(({ id }) => id)).toEqual(
+		expect((manifest.projects ?? []).map(({ id }) => id)).toEqual(
 			placement === 'project' ? [project.id, otherProject.id] : [],
 		);
-		for (const entry of result.agentEntries) {
+		for (const entry of manifest.agents ?? []) {
 			const projectId = entry.id === parent.id ? project.id : otherProject.id;
-			const prefix = placement === 'project' ? `${result.projectTargetsById.get(projectId)}/` : '';
+			const prefix =
+				placement === 'project'
+					? `${manifest.projects?.find(({ id }) => id === projectId)?.target}/`
+					: '';
 			expect(entry.target.startsWith(`${prefix}agents/`)).toBe(true);
 		}
-		const requirements = await Container.get(WorkflowDependencyResolver).resolve({
-			user,
-			workflowIds: [nested.id],
-			agentRequirements: result.workflowRequirements,
-			workflowVersionPolicy: 'latest',
-		});
-		expect(requirements).toEqual([
-			{
-				agentId: parent.id,
-				projectId: project.id,
-				referencedWorkflowId: parent.id,
-				origin: placement === 'project' ? 'project' : 'top-level',
-			},
-			{ workflowId: nested.id, referencedWorkflowId: parent.id },
-			{ workflowId: parent.id, referencedWorkflowId: nested.id },
-		]);
 	},
 );
 
@@ -341,47 +355,27 @@ it.each(['fail', 'reference-only', 'include-in-package'] as const)(
 			subAgents: { agents: [{ agentId: child.id }] },
 			tools: [{ type: 'workflow', workflowId: workflow.id, workflow: 'Display' }],
 		});
-		const agents = await exporter.export({
-			user: owner,
-			writer: new CapturingWriter(),
-			agentIds: [parent.id],
-			missingAgentDependencyPolicy: 'reference-only',
-		});
-		expect(agents.agentIds).toEqual([parent.id]);
-		const requirements = await Container.get(WorkflowDependencyResolver).resolve({
-			user: owner,
-			workflowIds: [],
-			agentRequirements: agents.workflowRequirements,
-			traversal: policy === 'reference-only' ? 'direct' : 'transitive',
-			workflowVersionPolicy: 'latest',
-		});
-		if (policy === 'fail') {
-			expect(() => assertStaticSubWorkflowsIncluded(requirements, new Set())).toThrow(
-				PackageExportBlockedError,
-			);
-			return;
-		}
-		if (policy === 'reference-only') {
-			const result = await Container.get(WorkflowRequirementExporter).export({
+		const run = Container.get(N8nPackagesService).exportPackageToWriter(
+			{
 				user: owner,
-				requirements,
-				workflows: [],
-			});
-			expect(result.requirements).toEqual([
-				{ id: workflow.id, name: workflow.name, usedBy: [{ kind: 'agent', id: parent.id }] },
-			]);
+				agentIds: [parent.id],
+				missingAgentDependencyPolicy: 'reference-only',
+				missingWorkflowDependencyPolicy: policy,
+			},
+			new CapturingWriter(),
+		);
+		if (policy === 'fail') {
+			await expect(run).rejects.toThrow(PackageExportBlockedError);
 			return;
 		}
-		const result = await Container.get(AutoIncludedWorkflowResolver).resolve({
-			user: owner,
-			requirements,
-			topLevelWorkflowIds: [],
-			folderWorkflowIds: [],
-			projectWorkflowIds: [],
-			includeTags: false,
-			workflowVersionPolicy: 'latest',
-		});
-		expect(result.autoIncludedWorkflows.map(({ workflow }) => workflow.id)).toEqual([workflow.id]);
+		const { manifest } = await run;
+		expect(manifest.agents?.map(({ id }) => id)).toEqual([parent.id]);
+		expect(manifest.workflows?.map(({ id }) => id) ?? []).toEqual(
+			policy === 'include-in-package' ? [workflow.id] : [],
+		);
+		expect(manifest.requirements?.workflows).toEqual([
+			{ id: workflow.id, name: workflow.name, usedBy: [{ kind: 'agent', id: parent.id }] },
+		]);
 	},
 );
 
@@ -406,16 +400,17 @@ it('skips an unpublished root but fails when an included Agent requires it', asy
 	).rejects.toThrow(PackageExportBlockedError);
 });
 
-it.each([{ projectWorkflowIds: [] }, { projectWorkflowIds: ['selected-workflow'] }])(
+it.each([{ projectWorkflowIds: [] }, { projectWorkflowIds: ['selected_workflow'] }])(
 	'does not expand a restricted project selection $projectWorkflowIds',
 	async ({ projectWorkflowIds }) => {
-		const result = await exporter.export({
-			user: owner,
-			writer: new CapturingWriter(),
-			projectIds: [project.id],
-			projectWorkflowIds,
-		});
-		expect(result.agentIds).toEqual([]);
+		await createWorkflow({ id: 'selected_workflow', nodes: [] }, project);
+		const result = await Container.get(N8nPackagesService).exportPackageToWriter(
+			{ user: owner, projectIds: [project.id], projectWorkflowIds },
+			new CapturingWriter(),
+		);
+		expect(result.manifest.agents).toBeUndefined();
+		expect(result.manifest.workflows?.map(({ id }) => id) ?? []).toEqual(projectWorkflowIds);
+		expect(result.counts.agents).toBe(0);
 	},
 );
 
@@ -433,12 +428,20 @@ it.each(['agentIds', 'workflowIds', 'folderIds'] as const)(
 	},
 );
 
-it('leaves public project exports unchanged while Agents are enabled', async () => {
-	const writer = new CapturingWriter();
-	const result = await Container.get(N8nPackagesService).exportPackageToWriter(
-		{ user: owner, projectIds: [project.id] },
-		writer,
-	);
-	expect(result.manifest.agents).toBeUndefined();
-	expect(writer.files.some(({ path }) => path.endsWith('/agent.json'))).toBe(false);
-});
+it.each([undefined, true, false])(
+	'exports project Agents with includeAgents=%s',
+	async (includeAgents) => {
+		const writer = new CapturingWriter();
+		const result = await Container.get(N8nPackagesService).exportPackageToWriter(
+			{ user: owner, projectIds: [project.id], includeAgents },
+			writer,
+		);
+		expect(result.manifest.agents?.map(({ id }) => id) ?? []).toEqual(
+			includeAgents === false ? [] : [parent.id],
+		);
+		expect(result.counts.agents).toBe(includeAgents === false ? 0 : 1);
+		expect(writer.files.some(({ path }) => path.endsWith('/agent.json'))).toBe(
+			includeAgents !== false,
+		);
+	},
+);

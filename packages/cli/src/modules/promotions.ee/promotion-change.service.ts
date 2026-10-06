@@ -243,6 +243,7 @@ export class PromotionChangeService {
 			{
 				user,
 				projectIds: [projectId],
+				includeAgents: false,
 				includeArchivedWorkflows: true,
 				includeTags: true,
 				includeVariableValues: true,
