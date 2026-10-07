@@ -1,5 +1,6 @@
 import type { EventService } from '@n8n/backend-services';
 import { mockLogger } from '@n8n/backend-test-utils';
+import type { GlobalConfig } from '@n8n/config';
 import type { ExecutionRepository } from '@n8n/db';
 import Bull from 'bull';
 import type { Job, Queue } from 'bull';
@@ -11,6 +12,8 @@ import { mock } from 'vitest-mock-extended';
 import type { ActiveExecutions } from '@/active-executions';
 
 import { JobOutcomeTracker } from '../job-outcome-tracker';
+import { cancelJobRecovery, jobRecoveryKey, readJobRecovery } from '../job-recovery';
+import { ScalingService } from '../scaling.service';
 import type { JobData } from '../scaling.types';
 
 const REDIS_HOST = process.env.N8N_TEST_REDIS_HOST;
@@ -141,6 +144,30 @@ describe.skipIf(!REDIS_HOST || !REDIS_PORT)('Bull stalled-job recovery (real Red
 			expect(await redis.zscore(key('priority'), newId)).toBe('5');
 		});
 
+		test.each([false, true])('recovery keeps priority order when paused is %s', async (paused) => {
+			const original = await a.add(jobData('low'), { priority: 100 });
+			expect(await dequeueWithoutActivating()).toBe(String(original.id));
+			if (paused) await a.pause();
+			const high = await a.add(jobData('high'), { priority: 50 });
+			const lower = await a.add(jobData('lower'), { priority: 150 });
+
+			await sweepTwice();
+			const freshId = (await list(paused ? 'paused' : 'wait')).find(
+				(id) => id !== String(high.id) && id !== String(lower.id),
+			);
+			expect(freshId).toBeDefined();
+			if (paused) await a.resume();
+
+			const first = await b.getNextJob();
+			expect(String(first?.id)).toBe(String(high.id));
+			await first!.moveToCompleted('ok', false, true);
+			const second = await b.getNextJob();
+			expect(String(second?.id)).toBe(freshId);
+			await second!.moveToCompleted('ok', false, true);
+			expect(String((await b.getNextJob())?.id)).toBe(String(lower.id));
+			expect(await redis.exists(jobRecoveryKey(original))).toBe(0);
+		});
+
 		test('repeated never-activated recovery leaves stalledCounter unset', async () => {
 			let jobId = await addAndDequeue();
 
@@ -179,6 +206,24 @@ describe.skipIf(!REDIS_HOST || !REDIS_PORT)('Bull stalled-job recovery (real Red
 			expect(await stateOf(jobId)).toBe('failed');
 			expect(await redis.hget(key(jobId), 'failedReason')).toBe(STALL_FAILURE);
 		});
+
+		test.each([false, true])(
+			'an activated cancellation clears recovery on stall when recovered is %s',
+			async (recovered) => {
+				const original = await a.add(jobData('1'), { removeOnFail: 0 });
+				expect(await dequeueWithoutActivating()).toBe(String(original.id));
+				const jobId = recovered ? await recover(String(original.id)) : String(original.id);
+				const picked = recovered ? await b.getNextJob() : await b.moveToActive(jobId);
+				expect(String(picked?.id)).toBe(jobId);
+				await cancelJobRecovery(original);
+				await redis.del(lockKey(jobId));
+
+				await sweepTwice();
+
+				expect(await redis.exists(jobRecoveryKey(original))).toBe(0);
+				expect(await a.getJob(jobId)).toBeNull();
+			},
+		);
 	});
 
 	describe('explicit-id activation', () => {
@@ -352,6 +397,123 @@ describe.skipIf(!REDIS_HOST || !REDIS_PORT)('Bull stalled-job recovery (real Red
 			expect(await redis.exists(lockKey(newId))).toBe(0);
 			expect(await redis.hget(key(newId), 'data')).toBe(JSON.stringify(jobData('1')));
 		});
+	});
+
+	describe('missed recovery events', () => {
+		const createTracker = () =>
+			new JobOutcomeTracker(
+				mockLogger(),
+				mock<ActiveExecutions>(),
+				mock<ExecutionRepository>({
+					findStatusesByIds: vi.fn().mockResolvedValue([{ id: '1', status: 'new' }]),
+				}),
+				mock<EventService>(),
+			);
+
+		test.each(['stalled', 'processor'])(
+			'recheck rejects a removed fresh job after %s failure without events',
+			async (failure) => {
+				const tracker = createTracker();
+				const original = await a.add(jobData('1'), { removeOnFail: 0 });
+				const wait = tracker.waitFor(original);
+				const reason =
+					failure === 'stalled' ? 'job stalled more than maxStalledCount' : 'processor failed';
+				const rejected = expect(wait).rejects.toThrow(reason);
+				try {
+					expect(await dequeueWithoutActivating()).toBe(String(original.id));
+					let freshId = await recover(String(original.id));
+					expect(await dequeueWithoutActivating()).toBe(freshId);
+					freshId = await recover(freshId);
+					const picked = await b.getNextJob();
+					expect(String(picked?.id)).toBe(freshId);
+					if (failure === 'stalled') {
+						await redis.del(lockKey(freshId));
+						await sweepTwice();
+					} else {
+						await picked!.moveToFailed(new Error(reason), false);
+					}
+					expect(await a.getJob(freshId)).toBeNull();
+					expect((await readJobRecovery(original)).failedReason).toBe(reason);
+					expect(await redis.ttl(jobRecoveryKey(original))).toBeGreaterThan(0);
+
+					await tracker.recheckAll();
+
+					await rejected;
+					await vi.waitFor(async () =>
+						expect(await redis.exists(jobRecoveryKey(original))).toBe(0),
+					);
+				} finally {
+					tracker.clear();
+				}
+			},
+		);
+
+		test.each(['waiting', 'active', 'sweeping', 'first-sweep', 'original-active'])(
+			'cancellation targets the fresh job without events when %s',
+			async (state) => {
+				const tracker = createTracker();
+				const scaling = new ScalingService(
+					mockLogger(),
+					mock(),
+					mock(),
+					mock(),
+					mock<GlobalConfig>({ executions: { queueRecovery: { batchSize: 100, interval: 180 } } }),
+					mock(),
+					mock(),
+					mock(),
+					mock(),
+					mock(),
+					mock(),
+					tracker,
+				);
+				const original = await a.add(jobData('1'));
+				void tracker.waitFor(original);
+				try {
+					expect(await dequeueWithoutActivating()).toBe(String(original.id));
+					const hasRecovery = state !== 'first-sweep' && state !== 'original-active';
+					const freshId = hasRecovery ? await recover(String(original.id)) : String(original.id);
+					expect(tracker.currentJobId('1')).toBe(original.id);
+					let picked: Job<JobData> | null | undefined;
+					if (state === 'original-active') {
+						picked = await b.moveToActive(freshId);
+					} else if (state === 'active') {
+						picked = await b.getNextJob();
+					}
+					if (state === 'sweeping') {
+						expect(await dequeueWithoutActivating()).toBe(freshId);
+						const getJob = a.getJob.bind(a);
+						vi.spyOn(a, 'getJob').mockImplementationOnce(async (id) => {
+							await sweepTwice();
+							return await getJob(id);
+						});
+					}
+					if (state === 'first-sweep') {
+						const isActive = original.isActive.bind(original);
+						vi.spyOn(original, 'isActive').mockImplementationOnce(async () => {
+							await sweepTwice();
+							return await isActive();
+						});
+					}
+
+					expect(await scaling.stopJob(original)).toBe(true);
+
+					if (picked) {
+						expect(await redis.hget(key(freshId), 'progress')).toBe(
+							JSON.stringify({ kind: 'abort-job' }),
+						);
+						await picked.moveToCompleted('ok', false, true);
+					} else {
+						expect(await a.getJob(freshId)).toBeNull();
+					}
+					expect(await list('wait')).toEqual([]);
+					expect(await list('active')).toEqual([]);
+					expect(await a.moveToActive(freshId)).toBeNull();
+					expect(await redis.exists(jobRecoveryKey(original))).toBe(0);
+				} finally {
+					tracker.clear();
+				}
+			},
+		);
 	});
 
 	test('JobOutcomeTracker: the rebound wait settles once from the fresh id', async () => {

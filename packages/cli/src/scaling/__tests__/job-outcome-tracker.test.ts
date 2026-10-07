@@ -16,7 +16,15 @@ describe('JobOutcomeTracker', () => {
 	const eventService = mock<EventService>();
 	let tracker: JobOutcomeTracker;
 
-	const job = mock<Job>({ id: 'job-1', data: { executionId: 'exec-1' }, queue: { name: 'jobs' } });
+	const job = mock<Job>({
+		id: 'job-1',
+		data: { executionId: 'exec-1' },
+		queue: {
+			name: 'jobs',
+			toKey: vi.fn((suffix: string) => `bull:jobs:${suffix}`),
+			client: { hgetall: vi.fn().mockResolvedValue({}), del: vi.fn() },
+		},
+	});
 	const result = mock<JobFinishedProps>({ success: true, status: 'success' });
 
 	const statusRows = (statuses: Record<string, ExecutionStatus>) =>
@@ -156,6 +164,72 @@ describe('JobOutcomeTracker', () => {
 	});
 
 	describe('recheck', () => {
+		it('should restore the fresh ID when the recovery event was missed', async () => {
+			const original = mock<Job>({
+				id: 'job-1',
+				data: { executionId: 'exec-1' },
+				queue: {
+					name: 'jobs',
+					client: { hgetall: vi.fn().mockResolvedValue({ jobId: 'job-3' }) },
+				},
+			});
+			executionRepository.findStatusesByIds.mockResolvedValue(statusRows({ 'exec-1': 'new' }));
+			const wait = tracker.waitFor(original);
+
+			await tracker.recheckAll();
+
+			expect(tracker.currentJobId('exec-1')).toBe('job-3');
+			tracker.settleByJobKey('jobs', 'job-3');
+			await expect(wait).resolves.toBeUndefined();
+		});
+
+		it('should reject from the recovery record after the fresh job was removed', async () => {
+			const original = mock<Job>({
+				id: 'job-1',
+				data: { executionId: 'exec-1' },
+				queue: {
+					client: {
+						hgetall: vi.fn().mockResolvedValue({
+							jobId: 'job-2',
+							failedReason: 'job stalled more than maxStalledCount',
+						}),
+					},
+				},
+			});
+			executionRepository.findStatusesByIds.mockResolvedValue(statusRows({ 'exec-1': 'new' }));
+			const wait = tracker.waitFor(original);
+			const rejected = expect(wait).rejects.toThrow('job stalled more than maxStalledCount');
+
+			await tracker.recheckAll();
+
+			await rejected;
+			expect(activeExecutions.resolveResponsePromise).toHaveBeenCalledWith(
+				'exec-1',
+				expect.objectContaining({ statusCode: 500 }),
+			);
+		});
+
+		it('should retry a failed recovery read without dropping the wait', async () => {
+			const read = vi
+				.fn()
+				.mockRejectedValueOnce(new Error('Redis unavailable'))
+				.mockResolvedValue({ jobId: 'job-2' });
+			const original = mock<Job>({
+				id: 'job-1',
+				data: { executionId: 'exec-1' },
+				queue: { name: 'jobs', client: { hgetall: read } },
+			});
+			executionRepository.findStatusesByIds.mockResolvedValue(statusRows({ 'exec-1': 'running' }));
+			const wait = tracker.waitFor(original);
+
+			await tracker.recheckAll();
+			expect(tracker.currentJobId('exec-1')).toBe('job-1');
+			await tracker.recheckAll();
+			tracker.settleByJobKey('jobs', 'job-2');
+
+			await expect(wait).resolves.toBeUndefined();
+		});
+
 		it('should resolve from the DB when every completion event was missed', async () => {
 			vi.useFakeTimers();
 			executionRepository.findStatusesByIds.mockResolvedValue(statusRows({ 'exec-1': 'success' }));

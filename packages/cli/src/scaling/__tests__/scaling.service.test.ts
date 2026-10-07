@@ -24,7 +24,7 @@ import type { WebhookResponseRelay } from '../webhook-response-relay';
 
 const queue = mock<JobQueue>({
 	name: 'jobs',
-	client: { ping: vi.fn() },
+	client: { ping: vi.fn(), eval: vi.fn().mockResolvedValue(null), del: vi.fn() },
 });
 
 vi.mock('bull', () => ({
@@ -968,9 +968,13 @@ describe('ScalingService', () => {
 	});
 
 	describe('stopJob', () => {
+		beforeEach(() => {
+			jobOutcomeTracker.currentJobId.mockReset();
+		});
+
 		it('should stop an active job by sending abort signal only', async () => {
 			await scalingService.setupQueue();
-			const job = mock<Job>({ isActive: vi.fn().mockResolvedValue(true) });
+			const job = mock<Job>({ queue, isActive: vi.fn().mockResolvedValue(true) });
 
 			const result = await scalingService.stopJob(job);
 
@@ -982,7 +986,7 @@ describe('ScalingService', () => {
 
 		it('should stop an inactive job', async () => {
 			await scalingService.setupQueue();
-			const job = mock<Job>({ isActive: vi.fn().mockResolvedValue(false) });
+			const job = mock<Job>({ queue, isActive: vi.fn().mockResolvedValue(false) });
 
 			const result = await scalingService.stopJob(job);
 
@@ -996,8 +1000,9 @@ describe('ScalingService', () => {
 			const job = mock<Job>({
 				id: 'job-1',
 				data: { executionId: 'exec-1' },
-				queue: { getJob: vi.fn().mockResolvedValue(fresh) },
+				queue,
 			});
+			queue.getJob.mockResolvedValueOnce(fresh);
 			jobOutcomeTracker.currentJobId.mockReturnValueOnce('job-2');
 
 			const result = await scalingService.stopJob(job);
@@ -1007,9 +1012,30 @@ describe('ScalingService', () => {
 			expect(result).toBe(true);
 		});
 
+		it('should stop the fresh job even when the recovery event was missed', async () => {
+			await scalingService.setupQueue();
+			const fresh = mock<Job>({ id: 'job-3', isActive: vi.fn().mockResolvedValue(false) });
+			const job = mock<Job>({
+				id: 'job-1',
+				data: { executionId: 'exec-1' },
+				queue: {
+					getJob: vi.fn().mockResolvedValue(fresh),
+					client: { eval: vi.fn().mockResolvedValue('job-3') },
+				},
+			});
+			jobOutcomeTracker.currentJobId.mockReturnValueOnce('job-1');
+
+			expect(await scalingService.stopJob(job)).toBe(true);
+
+			expect(job.queue.getJob).toHaveBeenCalledWith('job-3');
+			expect(fresh.remove).toHaveBeenCalled();
+			expect(job.remove).not.toHaveBeenCalled();
+		});
+
 		it('should report failure to stop a job', async () => {
 			await scalingService.setupQueue();
 			const job = mock<Job>({
+				queue,
 				isActive: vi.fn().mockImplementation(() => {
 					throw new UnexpectedError('Something went wrong');
 				}),

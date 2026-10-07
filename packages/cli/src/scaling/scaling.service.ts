@@ -21,6 +21,7 @@ import { assertNever } from '@/utils';
 import { JOB_TYPE_NAME } from './constants';
 import { JobOutcomeTracker } from './job-outcome-tracker';
 import { JobProcessor } from './job-processor';
+import { cancelJobRecovery, clearJobRecovery } from './job-recovery';
 import { throwJobBackToQueue } from './job-return';
 import { DEFAULT_QUEUE_NAME, resolveQueueName, resolveWorkerPoolName } from './queue-name';
 import type {
@@ -476,14 +477,16 @@ export class ScalingService {
 	async stopJob(job: Job) {
 		const { executionId } = job.data;
 		const props = { jobId: job.id, executionId };
+		const trackedJobId = this.jobOutcomeTracker.currentJobId(executionId);
 
-		// The stall sweep may have returned the job under a fresh ID since it was enqueued
-		const currentJobId = this.jobOutcomeTracker.currentJobId(executionId);
-
-		// A removed job emits no completion event, and the caller handles the cancellation
+		// A removed job emits no completion event, and the caller handles the cancellation.
 		this.jobOutcomeTracker.drop(executionId);
 
 		try {
+			// Read Redis as well as the tracker, because the recovery event may have been missed.
+			const currentJobId = (await cancelJobRecovery(job)) ?? trackedJobId;
+			const originalJob = job;
+
 			if (currentJobId !== undefined && currentJobId !== job.id) {
 				job = (await job.queue.getJob(currentJobId)) ?? job;
 				props.jobId = job.id;
@@ -496,6 +499,7 @@ export class ScalingService {
 			}
 
 			await job.remove(); // not yet picked up, or waiting for next pickup (stalled)
+			await clearJobRecovery(originalJob);
 			this.logger.debug('Stopped inactive job', props);
 			return true;
 		} catch (error: unknown) {
