@@ -11,7 +11,7 @@ import type {
 import { mock, type MockProxy } from 'vitest-mock-extended';
 
 import { BadRequestError, NotFoundError } from '@n8n/errors';
-import type { Agent } from '@/modules/agents/entities/agent.entity';
+import type { ProjectAgent } from '@/modules/agents/entities/agent.entity';
 import type { AgentRepository } from '@/modules/agents/repositories/agent.repository';
 
 import type { AgentEvalCaseGenerationService } from '../agent-eval-case-generation.service';
@@ -91,7 +91,7 @@ describe('AgentEvalService', () => {
 		runner = mock<AgentEvalRunnerService>();
 		caseGenerationService = mock<AgentEvalCaseGenerationService>();
 
-		agentRepository.findByIdAndProjectId.mockResolvedValue(mock<Agent>({ id: AGENT_ID }));
+		agentRepository.findByIdAndProjectId.mockResolvedValue(mock<ProjectAgent>({ id: AGENT_ID }));
 		datasetRepository.findByIdAndAgentId.mockResolvedValue(makeDataset());
 		runRepository.findByIdAndAgentId.mockResolvedValue(makeRun());
 		runRepository.findAndCountByDatasetIdAndAgentId.mockResolvedValue([[], 0]);

@@ -16,7 +16,7 @@ import { ForbiddenError, NotFoundError } from '@n8n/errors';
 import { resolveEvaluationConcurrencyLimit } from '@/evaluation.ee/evaluation-concurrency.helper';
 import type { License } from '@/license';
 import type { AgentsSettingsService } from '@/modules/agents/agents-settings.service';
-import type { Agent } from '@/modules/agents/entities/agent.entity';
+import type { ProjectAgent } from '@/modules/agents/entities/agent.entity';
 import type { AgentRepository } from '@/modules/agents/repositories/agent.repository';
 import type { DataTableService } from '@/modules/data-table/data-table.service';
 import type { EvalAgentExecutionService } from '@/modules/instance-ai/eval/agent-execution.service';
@@ -142,7 +142,7 @@ describe('AgentEvalRunnerService', () => {
 
 		datasetRepository.findById.mockResolvedValue(dataset);
 		agentRepository.findByIdAndProjectId.mockResolvedValue(
-			mock<Agent>({ id: 'agent-1', activeVersionId: 'v-1' }),
+			mock<ProjectAgent>({ id: 'agent-1', activeVersionId: 'v-1' }),
 		);
 		runRepository.createRun.mockResolvedValue(mock({ id: 'run-1' }));
 		runRepository.isCancellationRequested.mockResolvedValue(false);
