@@ -48,6 +48,10 @@ import {
 	getMessageInteractives,
 	parseApprovalInput,
 } from '@/features/ai/shared/agentsChat/messageMappers';
+import {
+	AGENTS_CHAT_INTERACTION_EXTENSIONS,
+	type AgentsChatInteractionExtension,
+} from '@/features/ai/shared/agentsChat/interactionRegistry';
 import AgentChatEmptyState from './AgentChatEmptyState.vue';
 import type { ChatMessage } from '@/features/ai/shared/agentsChat/types';
 import { resolveFileMimeType } from '@/app/utils/fileUtils';
@@ -104,6 +108,11 @@ const props = withDefaults(
 		 * increase action. Resolves true once the new cap is saved.
 		 */
 		increaseBudget?: (payload: { field: BudgetAmountField; amount: number }) => Promise<boolean>;
+		/**
+		 * Card types of the host agent. Only this chat maps and renders them. The
+		 * list is read once, when the panel is set up.
+		 */
+		interactionExtensions?: readonly AgentsChatInteractionExtension[];
 	}>(),
 	{
 		visible: true,
@@ -119,6 +128,7 @@ const props = withDefaults(
 		centerEmptyState: false,
 		budgetCards: false,
 		increaseBudget: undefined,
+		interactionExtensions: () => [],
 	},
 );
 
@@ -182,7 +192,13 @@ const {
 	},
 	onSessionCreated: (sessionId) => emit('session-created', sessionId),
 	budgetCards: props.budgetCards,
+	interactionExtensions: props.interactionExtensions,
 });
+
+provide(
+	AGENTS_CHAT_INTERACTION_EXTENSIONS,
+	computed(() => props.interactionExtensions),
+);
 
 const currentPlan = computed(() => selectLatestAgentPlan(messages.value));
 

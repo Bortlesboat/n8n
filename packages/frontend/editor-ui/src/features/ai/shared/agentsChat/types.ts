@@ -8,7 +8,11 @@ import {
 
 import type { N8nChatInteractionInput, N8nChatResumeValue } from './n8nChatInteraction';
 
-import type { ChatMessageStatus, ToolCallState } from './constants';
+import type {
+	ChatMessageStatus,
+	INTERACTION_EXTENSION_TOOL_NAME,
+	ToolCallState,
+} from './constants';
 
 export type { ChatMessageStatus, ToolCallState };
 
@@ -107,6 +111,17 @@ export type InteractivePayload =
 			toolName: typeof WAIT_TOOL_NAME;
 			input: N8nChatInteractionInput;
 			resolvedValue?: N8nChatResumeValue;
+	  })
+	/**
+	 * A card of a host-provided extension (`AgentsChatInteractionExtension`).
+	 * The extension parses the input and renders the card. The resolved value
+	 * is the resume data that the card submitted.
+	 */
+	| (InteractivePayloadBase & {
+			toolName: typeof INTERACTION_EXTENSION_TOOL_NAME;
+			extensionKey: string;
+			input: unknown;
+			resolvedValue?: unknown;
 	  });
 
 export type AgentsChatInteraction = InteractivePayload;

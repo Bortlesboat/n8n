@@ -17,6 +17,11 @@ import {
 import type { AgentJsonConfig } from '../types';
 import AgentChatPlan from '../components/AgentChatPlan.vue';
 import { planMessage, planView } from './fixtures/agent-plan';
+import type { AgentsChatInteractionExtension } from '@/features/ai/shared/agentsChat/interactionRegistry';
+import {
+	TEST_EXTENSION_KEY,
+	testInteractionExtensions,
+} from '@/features/ai/shared/agentsChat/__tests__/fixtures/testInteractionExtension';
 
 type PanelVm = { sendMessageFromOutside: (message: string, files?: File[]) => void };
 const isMacOsMock = ref(false);
@@ -74,6 +79,7 @@ vi.mock('@n8n/stores/useRootStore', () => ({
 	useRootStore: () => ({ restApiContext: { baseUrl: '/rest' } }),
 }));
 let onHistoryLoaded: ((count: number) => void) | undefined;
+let streamInteractionExtensions: readonly AgentsChatInteractionExtension[] | undefined;
 
 const fatalErrorMock = ref<{ missing: string[] } | null>(null);
 
@@ -236,21 +242,38 @@ vi.mock('../components/AgentChatEmptyState.vue', () => ({
 	default: { template: '<div data-testid="empty-state-stub" />' },
 }));
 
-vi.mock('../components/AgentChatMessageList.vue', () => ({
-	default: {
-		name: 'AgentChatMessageList',
-		template: '<div data-testid="message-list-stub" />',
-		props: ['messages', 'messagingState', 'canIncreaseBudget', 'budgetIncreasePending'],
-		emits: ['send-to-assistant', 'increase-budget'],
-	},
-}));
+vi.mock('../components/AgentChatMessageList.vue', async () => {
+	const { computed: vueComputed, inject } = await import('vue');
+	const { AGENTS_CHAT_INTERACTION_EXTENSIONS } = await import(
+		'@/features/ai/shared/agentsChat/interactionRegistry'
+	);
+	return {
+		default: {
+			name: 'AgentChatMessageList',
+			template: '<div data-testid="message-list-stub" :data-extension-keys="extensionKeys" />',
+			props: ['messages', 'messagingState', 'canIncreaseBudget', 'budgetIncreasePending'],
+			emits: ['send-to-assistant', 'increase-budget'],
+			setup() {
+				// The real list renders cards through InteractiveCard, which injects these.
+				const extensions = inject(AGENTS_CHAT_INTERACTION_EXTENSIONS, undefined);
+				return {
+					extensionKeys: vueComputed(
+						() => extensions?.value.map((extension) => extension.key).join(',') ?? '',
+					),
+				};
+			},
+		},
+	};
+});
 
 vi.mock('../composables/useAgentChatStream', () => ({
 	useAgentChatStream: (options: {
 		channel?: { value: 'chat' | 'n8n-chat' };
 		onHistoryLoaded: (count: number) => void;
+		interactionExtensions?: readonly AgentsChatInteractionExtension[];
 	}) => {
 		onHistoryLoaded = options.onHistoryLoaded;
+		streamInteractionExtensions = options.interactionExtensions;
 		return {
 			capabilities: computed(() => {
 				// Mirrors the composable: every capability is off on the n8n Chat channel.
@@ -331,6 +354,7 @@ describe('AgentChatPanel', () => {
 		respondToApprovalMock.mockReset().mockResolvedValue(undefined);
 		fatalErrorMock.value = null;
 		onHistoryLoaded = undefined;
+		streamInteractionExtensions = undefined;
 	});
 
 	function mountPanel(
@@ -347,6 +371,7 @@ describe('AgentChatPanel', () => {
 			channel: 'chat' | 'n8n-chat';
 			centerEmptyState: boolean;
 			newSession: boolean;
+			interactionExtensions: readonly AgentsChatInteractionExtension[];
 		}> = {},
 		attachTo?: HTMLElement,
 	) {
@@ -385,6 +410,32 @@ describe('AgentChatPanel', () => {
 
 		expect(wrapper.emitted('first-user-message')?.at(-1)).toEqual(['Review my draft']);
 		wrapper.unmount();
+	});
+
+	describe('interactionExtensions', () => {
+		beforeEach(() => {
+			messagesMock.value = [{ id: 'm1', role: 'assistant', content: 'Hi' } as ChatMessage];
+		});
+
+		it('passes the extensions to the stream and to the cards of the message list', () => {
+			const wrapper = mountPanel({ interactionExtensions: testInteractionExtensions });
+
+			expect(streamInteractionExtensions).toEqual(testInteractionExtensions);
+			expect(
+				wrapper.get('[data-testid="message-list-stub"]').attributes('data-extension-keys'),
+			).toBe(TEST_EXTENSION_KEY);
+			wrapper.unmount();
+		});
+
+		it('uses no extensions by default', () => {
+			const wrapper = mountPanel();
+
+			expect(streamInteractionExtensions).toEqual([]);
+			expect(
+				wrapper.get('[data-testid="message-list-stub"]').attributes('data-extension-keys'),
+			).toBe('');
+			wrapper.unmount();
+		});
 	});
 
 	describe('centerEmptyState', () => {
