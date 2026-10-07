@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, useTemplateRef, watch } from 'vue';
+import { computed, inject, nextTick, onMounted, ref, useTemplateRef, watch } from 'vue';
 import { N8nButton, N8nCallout, N8nIcon, N8nIconButton, N8nText } from '@n8n/design-system';
 import { APPROVAL_TOOL_NAME, N8N_CHAT_ACTION_TOOL_NAME } from '@n8n/api-types';
 import { isAwaitingCard } from '@/features/ai/shared/agentsChat/n8nChatInteraction';
@@ -8,6 +8,11 @@ import { useSessionStorage } from '@vueuse/core';
 import { TIME } from '@/app/constants/durations';
 import { isAssistantGroup, type DisplayGroup } from '@/features/ai/shared/agentsChat/displayGroups';
 import { getMessageInteractives, isRecord } from '@/features/ai/shared/agentsChat/messageMappers';
+import {
+	AGENTS_CHAT_INTERACTION_EXTENSIONS,
+	findToolResultRenderer,
+	type AgentsChatToolResultRenderer,
+} from '@/features/ai/shared/agentsChat/interactionRegistry';
 import {
 	getMessageThinkingSegments,
 	getThinkingDurationSec,
@@ -145,6 +150,39 @@ function getMessageRenderItems(message: ChatMessage): MessageRenderItem[] {
 	}
 
 	return items;
+}
+
+const interactionExtensions = inject(AGENTS_CHAT_INTERACTION_EXTENSIONS, undefined);
+
+/**
+ * Host renderers for finished tool calls, by tool call id. A call in this map
+ * shows the host component in place of its default tool step.
+ */
+const toolResultRenderers = computed(() => {
+	const renderers = new Map<string, AgentsChatToolResultRenderer>();
+	const extensions = interactionExtensions?.value ?? [];
+	if (extensions.length === 0) return renderers;
+	for (const message of props.messages) {
+		for (const toolCall of message.toolCalls ?? []) {
+			const renderer = findToolResultRenderer(toolCall, extensions);
+			if (renderer) renderers.set(toolCall.toolCallId, renderer);
+		}
+	}
+	return renderers;
+});
+
+function getStepToolCalls(toolCalls: ToolCall[]): ToolCall[] {
+	if (toolResultRenderers.value.size === 0) return toolCalls;
+	return toolCalls.filter((toolCall) => !toolResultRenderers.value.has(toolCall.toolCallId));
+}
+
+function getHostToolResults(
+	toolCalls: ToolCall[],
+): Array<{ toolCall: ToolCall; renderer: AgentsChatToolResultRenderer }> {
+	return toolCalls.flatMap((toolCall) => {
+		const renderer = toolResultRenderers.value.get(toolCall.toolCallId);
+		return renderer ? [{ toolCall, renderer }] : [];
+	});
 }
 
 const scrollRef = useTemplateRef<HTMLDivElement>('scrollRef');
@@ -463,14 +501,22 @@ watch(
 			<div v-else-if="group.kind === 'toolRun'" :class="[$style.message, $style.assistant]">
 				<div :class="$style.content">
 					<AgentChatToolSteps
-						v-if="group.toolCalls.length"
-						:tool-calls="group.toolCalls"
+						v-if="getStepToolCalls(group.toolCalls).length"
+						:tool-calls="getStepToolCalls(group.toolCalls)"
 						:project-id="projectId"
 						:can-fix-with-assistant="canSendToAssistant"
 						:dismissed-tool-call-ids="dismissedFixToolCallIds"
 						:execution-id="group.executionId"
 						@fix-with-assistant="onFixWithAssistant(group, $event)"
 					/>
+					<div
+						v-for="result in getHostToolResults(group.toolCalls)"
+						:key="`result-${result.toolCall.toolCallId}`"
+						:class="$style.toolResult"
+						data-testid="agent-chat-host-tool-result"
+					>
+						<component :is="result.renderer.component" :tool-call="result.toolCall" />
+					</div>
 					<template v-for="tc in group.toolCalls" :key="`wait-${tc.toolCallId}`">
 						<N8nText
 							v-if="externalWaitPlatform(tc)"
@@ -562,14 +608,22 @@ watch(
 			>
 				<div :class="$style.content">
 					<AgentChatToolSteps
-						v-if="group.message.toolCalls?.length"
-						:tool-calls="group.message.toolCalls"
+						v-if="getStepToolCalls(group.message.toolCalls ?? []).length"
+						:tool-calls="getStepToolCalls(group.message.toolCalls ?? [])"
 						:project-id="projectId"
 						:can-fix-with-assistant="canSendToAssistant"
 						:dismissed-tool-call-ids="dismissedFixToolCallIds"
 						:execution-id="group.message.executionId"
 						@fix-with-assistant="onFixWithAssistant(group, $event)"
 					/>
+					<div
+						v-for="result in getHostToolResults(group.message.toolCalls ?? [])"
+						:key="`result-${result.toolCall.toolCallId}`"
+						:class="$style.toolResult"
+						data-testid="agent-chat-host-tool-result"
+					>
+						<component :is="result.renderer.component" :tool-call="result.toolCall" />
+					</div>
 					<template v-for="tc in group.message.toolCalls ?? []" :key="`wait-${tc.toolCallId}`">
 						<N8nText
 							v-if="externalWaitPlatform(tc)"
@@ -795,6 +849,12 @@ watch(
 	display: flex;
 	flex-direction: column;
 	gap: var(--spacing--2xs);
+	margin-top: var(--spacing--2xs);
+	margin-bottom: var(--spacing--2xs);
+}
+
+/* A host component that replaces the default step of a finished tool call. */
+.toolResult {
 	margin-top: var(--spacing--2xs);
 	margin-bottom: var(--spacing--2xs);
 }
