@@ -352,6 +352,8 @@ export {
 export { PaginationDto, MAX_ITEMS_PER_PAGE } from './pagination/pagination.dto';
 
 export type {
+	NodeTypePolicyRule,
+	NodeTypePolicySelector,
 	NonDelegatingPolicyAction,
 	NonDelegatingPolicyRule,
 	PolicyAction,
