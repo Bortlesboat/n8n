@@ -89,7 +89,7 @@ properties:
               description: >
                 `blocked` means the imported version could not be published
                 and no version is active (for example because the workflow
-                uses a stubbed credential, or uses a node type this instance
+                uses an empty or partially seeded credential, or uses a node type this instance
                 does not have). When a prior published version
                 remains active, `state` is `unchanged` with
                 `skippedPublishReason` instead. `failed` means publish or
@@ -115,7 +115,7 @@ properties:
               description: >
                 Present when `state` is `unchanged` but the policy wanted
                 to publish the imported version: a prior published version
-                is still active (for example after an update with stubbed
+                is still active (for example after an update with incomplete
                 credentials).
         status:
           type: string
@@ -250,7 +250,7 @@ properties:
     type: object
     description: >
       Source credential ids grouped by whether they matched an
-      existing credential or were created as stubs. Full
+      existing credential or were created as empty stubs or seeded credentials. Full
       source→target id mapping is in `bindings.credentials`.
     required:
       - matched
@@ -277,7 +277,8 @@ properties:
           type: string
         description: >
           Source credential ids for which credentials were created
-          with bundled expression values in the target project.
+          with bundled expression values in the target project. Partial or
+          unverified bundled data still blocks workflow publishing.
   dataTables:
     type: object
     required:

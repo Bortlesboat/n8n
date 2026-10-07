@@ -350,6 +350,7 @@ describe('CredentialImporter', () => {
 				bindings: new Map([['cred-source', 'cred-source']]),
 				matched: ['cred-source'],
 				stubbed: [],
+				seeded: [],
 			});
 		});
 
@@ -397,6 +398,7 @@ describe('CredentialImporter', () => {
 
 			expect(credentialsService.createStubCredential).toHaveBeenCalledWith(
 				{
+					id: 'missing-cred',
 					name: 'Source GitHub',
 					type: 'githubApi',
 					projectId: 'project-target',
@@ -428,7 +430,12 @@ describe('CredentialImporter', () => {
 			);
 
 			expect(credentialsService.createStubCredential).toHaveBeenCalledWith(
-				{ name: 'Source GitHub', type: 'githubApi', projectId: 'project-target' },
+				{
+					id: 'no-data-cred',
+					name: 'Source GitHub',
+					type: 'githubApi',
+					projectId: 'project-target',
+				},
 				user,
 			);
 			expect(result.stubbed).toEqual(['no-data-cred', 'empty-data-cred']);
@@ -453,7 +460,12 @@ describe('CredentialImporter', () => {
 			);
 
 			expect(credentialsService.createStubCredential).toHaveBeenCalledWith(
-				{ name: 'Source GitHub', type: 'githubApi', projectId: 'project-target' },
+				{
+					id: 'missing-cred',
+					name: 'Source GitHub',
+					type: 'githubApi',
+					projectId: 'project-target',
+				},
 				user,
 			);
 			expect(result.stubbed).toEqual(['missing-cred']);

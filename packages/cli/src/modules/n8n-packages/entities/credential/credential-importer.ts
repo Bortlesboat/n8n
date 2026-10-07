@@ -56,14 +56,26 @@ export class CredentialImporter {
 		return credentialBlockingFailures(request.missingMode, resolution);
 	}
 
-	/**
-	 * Creates credentials for unresolved `not_found` references under the creating
-	 * missing modes — empty stubs under `create-stub`, seeded from the package's
-	 * bundled expression data under `create-with-values` (falling back to an empty
-	 * stub when the package carries none) — then returns the full source→target
-	 * binding map. {@link CredentialsService.createStubCredential} enforces
-	 * `credential:create` on the target project.
-	 */
+	async assertCanCreate(
+		context: ImportContext,
+		request: CredentialBindingRequest,
+		resolution: CredentialResolution,
+	): Promise<void> {
+		if (!credentialMissingModeUsesPackageData(request.missingMode)) return;
+
+		const packageData = packageDataBySourceId(request.requirements);
+		for (const { sourceId } of stubbableCredentialFailures(resolution.failures)) {
+			const data = packageData.get(sourceId);
+			if (data !== undefined) {
+				await this.credentialsService.validateStubCredentialData(
+					data,
+					context.user,
+					context.projectId,
+				);
+			}
+		}
+	}
+
 	async apply(
 		context: ImportContext,
 		request: CredentialBindingRequest,
