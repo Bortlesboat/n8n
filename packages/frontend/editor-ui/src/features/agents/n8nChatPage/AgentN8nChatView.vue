@@ -110,7 +110,7 @@ watch(
 
 watch(panel, (current) => {
 	if (!current || !pendingMessage || props.agentThreadId) return;
-	current.sendMessageFromOutside(pendingMessage.text, pendingMessage.files);
+	void current.sendMessageFromOutside(pendingMessage.text, pendingMessage.files);
 	pendingMessage = undefined;
 });
 

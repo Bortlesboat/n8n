@@ -68,7 +68,7 @@ watch(
 	[() => props.initialPrompt, chatPanel],
 	([prompt, panel]) => {
 		if (!prompt || !panel) return;
-		panel.sendMessageFromOutside(prompt);
+		void panel.sendMessageFromOutside(prompt);
 	},
 	{ immediate: true, flush: 'post' },
 );

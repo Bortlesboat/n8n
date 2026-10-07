@@ -49,7 +49,7 @@ import {
 	parseApprovalInput,
 } from '@/features/ai/shared/agentsChat/messageMappers';
 import AgentChatEmptyState from './AgentChatEmptyState.vue';
-import type { ChatMessage } from '@/features/ai/shared/agentsChat/types';
+import type { ChatMessage, InteractivePayload } from '@/features/ai/shared/agentsChat/types';
 import { resolveFileMimeType } from '@/app/utils/fileUtils';
 import AgentChatMessageList from './AgentChatMessageList.vue';
 import AgentChatPlan from './AgentChatPlan.vue';
@@ -109,6 +109,30 @@ const props = withDefaults(
 		 * (for example the user's time zone). Project agents ignore it.
 		 */
 		hostContext?: () => Record<string, unknown> | undefined;
+		/**
+		 * Replaces the default composer placeholder. The placeholders for an open
+		 * question card and for a non-empty queue still take priority.
+		 */
+		placeholder?: string;
+		/**
+		 * Enables file attachments when the agent config does not. The value is
+		 * the accepted MIME types for the file picker. An empty string accepts any file.
+		 */
+		attachmentAccept?: string;
+		/**
+		 * Shows the attach button of the composer. A host that opens the file
+		 * picker from its own `footer-start` menu sets this to false and calls
+		 * the exposed `openFilePicker`.
+		 */
+		showAttachButton?: boolean;
+		/**
+		 * Lets the host answer the open card on the last turn with the composer
+		 * text, instead of the default cancel-and-steer. For example, a review
+		 * card where typed text means "request changes" can return
+		 * `{ approved: false, feedback: text }`. Return `undefined` to keep the
+		 * default behavior. Staged files stay in the composer.
+		 */
+		composerResumeData?: (payload: InteractivePayload, text: string) => unknown;
 	}>(),
 	{
 		visible: true,
@@ -125,6 +149,10 @@ const props = withDefaults(
 		budgetCards: false,
 		increaseBudget: undefined,
 		hostContext: undefined,
+		placeholder: undefined,
+		attachmentAccept: undefined,
+		showAttachButton: true,
+		composerResumeData: undefined,
 	},
 );
 
@@ -139,6 +167,23 @@ const emit = defineEmits<{
 	'send-to-assistant': [event?: AgentSendToAssistantEvent];
 	/** The chat's first user message, for a host to title a thread that has no title yet. */
 	'first-user-message': [text: string | undefined];
+	/** The server accepted a new message. Answers to an open card do not emit this. */
+	'message-accepted': [payload: { text: string; files: File[] }];
+}>();
+
+defineSlots<{
+	/** Replaces the default empty state. */
+	'empty-state'?: () => unknown;
+	/** Content between the transcript and the composer, for example offers. */
+	'inline-offers'?: () => unknown;
+	/** Content docked above the composer, for example a checklist. */
+	'above-input'?: () => unknown;
+	/** Extra chips at the start of the composer attachment strip. */
+	'composer-attachments'?: () => unknown;
+	/** Controls at the start of the composer footer. */
+	'footer-start'?: () => unknown;
+	/** Content below the composer. */
+	'input-footer'?: () => unknown;
 }>();
 
 const locale = useI18n();
@@ -672,10 +717,12 @@ const attachmentCapabilities = computed(() => {
 	return provider ? PROVIDER_CAPABILITIES[provider]?.attachments : undefined;
 });
 const showAttach = computed(() => {
+	if (props.attachmentAccept !== undefined) return true;
 	const capabilities = attachmentCapabilities.value;
 	return !!capabilities && (capabilities.image || capabilities.pdf || capabilities.audio);
 });
 const acceptedMimeTypes = computed(() => {
+	if (props.attachmentAccept !== undefined) return props.attachmentAccept || undefined;
 	const capabilities = attachmentCapabilities.value;
 	if (!capabilities) return undefined;
 	return [
@@ -846,6 +893,8 @@ const chatPlaceholder = computed(() => {
 		);
 	}
 
+	if (props.placeholder) return props.placeholder;
+
 	const agentName = props.agentConfig?.name?.trim();
 	return agentName
 		? locale.baseText('agents.chat.input.placeholder.withAgent', {
@@ -974,6 +1023,28 @@ async function onSubmit(): Promise<SubmitResult> {
 		props.agentId === target.agentId &&
 		props.continueSessionId === target.continueSessionId;
 
+	const tailInteractive = openInteractive.value;
+	const composerResume =
+		text && tailInteractive?.runId && props.composerResumeData
+			? props.composerResumeData(tailInteractive, text)
+			: undefined;
+	if (tailInteractive?.runId && composerResume !== undefined) {
+		const result = await resume(
+			{
+				runId: tailInteractive.runId,
+				toolCallId: tailInteractive.toolCallId,
+				resumeData: composerResume,
+			},
+			() => {
+				if (!isCurrentTarget()) return;
+				if (inputText.value.trim() === text) inputText.value = '';
+				consumeQueuedExternalMessage(text);
+				trackSentToN8nChat(hadNoMessagesBeforeSend);
+			},
+		);
+		return result === 'busy' ? 'busy' : 'sent';
+	}
+
 	if (hasOpenInteractiveQuestion.value) {
 		if (!text) return 'rejected';
 		const result = await cancelAndSteer(text, () => {
@@ -1010,6 +1081,7 @@ async function onSubmit(): Promise<SubmitResult> {
 		const onAccepted = (queueId?: string) => {
 			accepted = true;
 			if (!isCurrentTarget()) return;
+			emit('message-accepted', { text, files });
 			if (installedPreview && firstMessagePreview.value === installedPreview) {
 				previewQueueId.value = queueId;
 			}
@@ -1079,7 +1151,11 @@ async function onIncreaseBudget(payload: { field: BudgetAmountField; amount: num
 	}
 }
 
-function sendMessageFromOutside(message: string, files?: File[]) {
+/**
+ * Sends a message from the host. Resolves to false when the chat rejects it.
+ * A message that waits until the chat is ready counts as sent.
+ */
+async function sendMessageFromOutside(message: string, files?: File[]): Promise<boolean> {
 	queuedExternalMessage = message;
 	externalAttachedFiles = files ?? [];
 	// Staged as the composer's own attachments, with the same count and size checks
@@ -1090,13 +1166,16 @@ function sendMessageFromOutside(message: string, files?: File[]) {
 	// A previewed message already shows as a bubble; `submitQueuedExternalMessage` fills
 	// the composer itself right before it submits.
 	if (!firstMessagePreview.value) inputText.value = message;
-	void submitQueuedExternalMessage();
+	const result = await submitQueuedExternalMessage();
+	return result !== 'rejected';
 }
 
-async function submitQueuedExternalMessage() {
+async function submitQueuedExternalMessage(): Promise<SubmitResult | undefined> {
 	const message = queuedExternalMessage;
 	// An empty text is still a send when files are staged with it.
-	if (message === undefined || submittingQueuedExternalMessage || isSubmissionBlocked.value) return;
+	if (message === undefined || submittingQueuedExternalMessage || isSubmissionBlocked.value) {
+		return undefined;
+	}
 
 	submittingQueuedExternalMessage = true;
 	let result: SubmitResult = 'rejected';
@@ -1121,6 +1200,7 @@ async function submitQueuedExternalMessage() {
 		await nextTick();
 		void submitQueuedExternalMessage();
 	}
+	return result;
 }
 
 function getConversationMarkdown(): string {
@@ -1133,7 +1213,33 @@ function getConversationMarkdown(): string {
 		.join('\n\n---\n\n');
 }
 
-defineExpose({ focusInput, getConversationMarkdown, sendMessageFromOutside, clearBudgetStops });
+/** True when the composer has text or staged files. */
+function isDirty(): boolean {
+	return hasDraft.value;
+}
+
+/** Puts text into the composer without sending it. */
+function setDraft(text: string) {
+	inputText.value = text;
+}
+
+function openFilePicker() {
+	chatInput.value?.openFilePicker();
+}
+
+defineExpose({
+	focusInput,
+	getConversationMarkdown,
+	sendMessageFromOutside,
+	clearBudgetStops,
+	isDirty,
+	setDraft,
+	openFilePicker,
+	// Read-only views of the chat state, for hosts that derive their own UI from it.
+	messages: computed(() => messages.value),
+	isStreaming: computed(() => isStreaming.value),
+	isLoadingHistory: computed(() => isLoadingHistory.value),
+});
 
 onMounted(() => {
 	void loadHistory();
@@ -1232,7 +1338,10 @@ onBeforeUnmount(() => {
 			@increase-budget="onIncreaseBudget"
 		/>
 
+		<slot name="inline-offers" />
+
 		<div :class="$style.inputArea">
+			<slot name="above-input" />
 			<div
 				v-if="showBackgroundJobs"
 				ref="backgroundJobCard"
@@ -1366,6 +1475,7 @@ onBeforeUnmount(() => {
 					:show-stop-button="showStop"
 					show-voice
 					:show-attach="showAttach"
+					:show-attach-button="showAttachButton"
 					:accepted-mime-types="acceptedMimeTypes"
 					:can-submit="!isSubmissionBlocked && hasDraft"
 					:disabled="isPreparingToSend || !!editingQueueId"
@@ -1405,8 +1515,9 @@ onBeforeUnmount(() => {
 							@remove="removeQueuedMessage"
 						/>
 					</template>
-					<template v-if="attachedFiles.length > 0" #attachments>
+					<template v-if="attachedFiles.length > 0 || $slots['composer-attachments']" #attachments>
 						<div :class="$style.attachmentsStrip">
+							<slot name="composer-attachments" />
 							<AttachmentPreview
 								v-for="(file, index) in attachedFiles"
 								:key="`${file.name}-${index}`"
