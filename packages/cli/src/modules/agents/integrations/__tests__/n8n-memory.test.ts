@@ -1,6 +1,7 @@
 import { hashEpisodicMemoryEvidence, type NewObservationLogEntry } from '@n8n/agents';
 import { In, IsNull, Like } from '@n8n/typeorm';
 import type { Mock, Mocked } from 'vitest';
+import { jsonParse } from 'n8n-workflow';
 import { mock } from 'vitest-mock-extended';
 
 import type { AgentMemoryEntryCandidateEntity } from '../../entities/agent-memory-entry-candidate.entity';
@@ -364,6 +365,150 @@ describe('N8nMemory', () => {
 				currentMessageContext,
 				summary: 'Support thread',
 			});
+		});
+	});
+
+	describe('patchThread', () => {
+		let writes: number;
+
+		/**
+		 * A row store behind the repository double. The read and the write are
+		 * separate async steps, so overlapping patches without the queue would
+		 * read the same row and lose an update.
+		 */
+		function seedThread(metadata: Record<string, unknown> | null) {
+			writes = 0;
+			const row = {
+				id: 'thread-1',
+				resourceId: 'user-1',
+				title: 'Chat',
+				metadata: metadata ? JSON.stringify(metadata) : null,
+			} as AgentThreadEntity;
+			threadRepository.patchMetadata.mockImplementation(async (threadId, update) => {
+				if (threadId !== row.id) return null;
+				const read = { ...row } as AgentThreadEntity;
+				await new Promise((resolve) => setImmediate(resolve));
+				const patch = update(read);
+				if (!patch) return read;
+				if (patch.title !== undefined) read.title = patch.title;
+				if (patch.metadata !== undefined) read.metadata = patch.metadata;
+				Object.assign(row, read);
+				writes++;
+				return { ...row } as AgentThreadEntity;
+			});
+			return row;
+		}
+
+		it('replaces the metadata, so a patch can remove keys', async () => {
+			const row = seedThread({ keep: 1, drop: 2 });
+
+			const updated = await memory.patchThread({
+				threadId: 'thread-1',
+				update: ({ metadata }) => {
+					const { drop: _drop, ...rest } = metadata ?? {};
+					return { title: 'Renamed', metadata: { ...rest, added: true } };
+				},
+			});
+
+			expect(jsonParse(row.metadata ?? '{}')).toEqual({ keep: 1, added: true });
+			expect(row.title).toBe('Renamed');
+			expect(updated).toMatchObject({
+				id: 'thread-1',
+				title: 'Renamed',
+				metadata: { keep: 1, added: true },
+			});
+		});
+
+		it('keeps the title when the patch only sets metadata', async () => {
+			const row = seedThread({ count: 1 });
+
+			await memory.patchThread({
+				threadId: 'thread-1',
+				update: () => ({ metadata: {} }),
+			});
+
+			expect(row.title).toBe('Chat');
+			expect(row.metadata).toBe('{}');
+		});
+
+		it('hands the update a copy of the metadata', async () => {
+			seedThread({ count: 1 });
+
+			const result = await memory.patchThread({
+				threadId: 'thread-1',
+				update: (thread) => {
+					thread.metadata!.count = 99;
+					return null;
+				},
+			});
+
+			expect(result?.metadata).toEqual({ count: 1 });
+			expect(writes).toBe(0);
+		});
+
+		it('returns the current thread without a write when the update returns null', async () => {
+			seedThread({ count: 1 });
+
+			const result = await memory.patchThread({ threadId: 'thread-1', update: () => null });
+
+			expect(result).toMatchObject({ id: 'thread-1', title: 'Chat', metadata: { count: 1 } });
+			expect(writes).toBe(0);
+		});
+
+		it('returns null for a missing thread without calling the update', async () => {
+			seedThread({});
+			const update = vi.fn();
+
+			expect(await memory.patchThread({ threadId: 'missing', update })).toBeNull();
+			expect(update).not.toHaveBeenCalled();
+			expect(writes).toBe(0);
+		});
+
+		it('runs concurrent patches on one thread one after another', async () => {
+			const row = seedThread({ count: 0 });
+			const increment = async () =>
+				await memory.patchThread({
+					threadId: 'thread-1',
+					update: ({ metadata }) => ({
+						metadata: { count: Number(metadata?.count ?? 0) + 1 },
+					}),
+				});
+
+			await Promise.all([increment(), increment(), increment()]);
+
+			expect(jsonParse(row.metadata ?? '{}')).toEqual({ count: 3 });
+			expect(writes).toBe(3);
+		});
+
+		it('keeps the queue moving after an update throws', async () => {
+			const row = seedThread({ count: 0 });
+
+			const failed = memory.patchThread({
+				threadId: 'thread-1',
+				update: () => {
+					throw new Error('update failed');
+				},
+			});
+			const next = memory.patchThread({
+				threadId: 'thread-1',
+				update: () => ({ metadata: { count: 1 } }),
+			});
+
+			await expect(failed).rejects.toThrow('update failed');
+			await expect(next).resolves.toMatchObject({ metadata: { count: 1 } });
+			expect(jsonParse(row.metadata ?? '{}')).toEqual({ count: 1 });
+		});
+
+		it('passes a root operation context to the repository', async () => {
+			seedThread({});
+
+			await memory.patchThread({ threadId: 'thread-1', update: () => null });
+
+			expect(threadRepository.patchMetadata).toHaveBeenCalledWith(
+				'thread-1',
+				expect.any(Function),
+				{},
+			);
 		});
 	});
 

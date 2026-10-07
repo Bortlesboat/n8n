@@ -78,6 +78,12 @@ import {
 /** Bounds the `IN` list of thread scopes one recall reads; older threads fall out first. */
 const EPISODIC_MEMORY_MAX_THREAD_SCOPES = 200;
 
+/**
+ * Serializes `patchThread` calls for one thread in this process. SQLite has no
+ * row lock, so this queue keeps local patches from reading stale metadata.
+ */
+const patchQueues = new Map<string, Promise<unknown>>();
+
 @Service()
 export class N8nMemory {
 	constructor(
@@ -190,6 +196,53 @@ export class N8nMemoryImpl
 		});
 		const saved = await this.threadRepository.save(entity);
 		return this.toThread(saved);
+	}
+
+	/**
+	 * Read, update and write one thread in one transaction. Unlike `saveThread`,
+	 * the update replaces the metadata, so a caller can remove keys. Updates to
+	 * the same thread also run one after another in this process.
+	 *
+	 * `update` gets a copy of the thread. When it returns `null` or `undefined`,
+	 * nothing is written and the current thread is returned. Returns `null` when
+	 * the thread does not exist.
+	 */
+	async patchThread(args: {
+		threadId: string;
+		update: (
+			current: Thread,
+		) => { title?: string; metadata?: Record<string, unknown> } | null | undefined;
+	}): Promise<Thread | null> {
+		const previous = patchQueues.get(args.threadId) ?? Promise.resolve();
+		const next = previous
+			// A failed patch must not block the next patch for the same thread.
+			.catch(() => {})
+			.then(
+				async () =>
+					await this.threadRepository.patchMetadata(
+						args.threadId,
+						(row) => {
+							const current = this.toThread(row);
+							const patch = args.update({
+								...current,
+								metadata: { ...(current.metadata ?? {}) },
+							});
+							if (!patch) return null;
+							return {
+								title: patch.title,
+								metadata: patch.metadata === undefined ? undefined : JSON.stringify(patch.metadata),
+							};
+						},
+						{},
+					),
+			);
+		patchQueues.set(args.threadId, next);
+		try {
+			const row = await next;
+			return row ? this.toThread(row) : null;
+		} finally {
+			if (patchQueues.get(args.threadId) === next) patchQueues.delete(args.threadId);
+		}
 	}
 
 	async deleteThread(threadId: string, ctx: OperationContext = {}): Promise<void> {
