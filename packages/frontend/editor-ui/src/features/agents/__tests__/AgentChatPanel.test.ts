@@ -347,6 +347,7 @@ describe('AgentChatPanel', () => {
 			channel: 'chat' | 'n8n-chat';
 			centerEmptyState: boolean;
 			newSession: boolean;
+			hostContext: () => Record<string, unknown> | undefined;
 		}> = {},
 		attachTo?: HTMLElement,
 	) {
@@ -1807,6 +1808,64 @@ describe('AgentChatPanel', () => {
 
 		expect(sendMessageMock).toHaveBeenCalledWith('update config', undefined, expect.any(Function));
 		expect(events).toEqual(['beforeSend', 'sendMessage']);
+	});
+
+	describe('hostContext', () => {
+		const send = (wrapper: ReturnType<typeof mountPanel>, text: string) =>
+			(
+				wrapper.vm as unknown as { sendMessageFromOutside: (message: string) => void }
+			).sendMessageFromOutside(text);
+
+		it('builds the host context after beforeSend and sends it with the message', async () => {
+			const events: string[] = [];
+			const beforeSend = vi.fn(() => {
+				events.push('beforeSend');
+			});
+			const hostContext = vi.fn(() => {
+				events.push('hostContext');
+				return { timeZone: 'Europe/Helsinki' };
+			});
+			sendMessageMock.mockResolvedValue('sent');
+			const wrapper = mountPanel({ beforeSend, hostContext });
+
+			send(wrapper, 'hello');
+			await flushPromises();
+
+			expect(events).toEqual(['beforeSend', 'hostContext']);
+			expect(sendMessageMock).toHaveBeenCalledWith('hello', undefined, expect.any(Function), {
+				timeZone: 'Europe/Helsinki',
+			});
+			wrapper.unmount();
+		});
+
+		it('builds a fresh host context for each message', async () => {
+			let count = 0;
+			const hostContext = vi.fn(() => ({ count: ++count }));
+			sendMessageMock.mockResolvedValue('sent');
+			const wrapper = mountPanel({ hostContext });
+
+			send(wrapper, 'first');
+			await flushPromises();
+			send(wrapper, 'second');
+			await flushPromises();
+
+			expect(sendMessageMock.mock.calls.map((call) => call[3])).toEqual([
+				{ count: 1 },
+				{ count: 2 },
+			]);
+			wrapper.unmount();
+		});
+
+		it('sends no host context when the builder returns undefined', async () => {
+			sendMessageMock.mockResolvedValue('sent');
+			const wrapper = mountPanel({ hostContext: () => undefined });
+
+			send(wrapper, 'hello');
+			await flushPromises();
+
+			expect(sendMessageMock).toHaveBeenCalledWith('hello', undefined, expect.any(Function));
+			wrapper.unmount();
+		});
 	});
 
 	it('retains an outside prompt during initial loading and consumes it only after acceptance', async () => {

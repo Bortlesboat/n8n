@@ -4855,3 +4855,52 @@ describe('useAgentChatStream — n8n Chat channel', () => {
 		expect(steerAgentQueuedMessageMock).not.toHaveBeenCalled();
 	});
 });
+
+describe('useAgentChatStream — host context', () => {
+	let originalFetch: typeof fetch;
+
+	beforeEach(() => {
+		originalFetch = globalThis.fetch;
+		getTestChatMessagesMock.mockReset();
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		vi.restoreAllMocks();
+	});
+
+	function mockChatFetch() {
+		const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
+			makeSseResponse([{ type: 'done' }]),
+		);
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
+		const sentBody = () => {
+			const init = fetchMock.mock.calls[0]?.[1];
+			return JSON.parse(String(init?.body)) as Record<string, unknown>;
+		};
+		return { fetchMock, sentBody };
+	}
+
+	it('sends the host context with the message when it is set', async () => {
+		const { fetchMock, sentBody } = mockChatFetch();
+		const hook = buildHook();
+
+		await hook.sendMessage('hello', undefined, undefined, { timeZone: 'Europe/Helsinki' });
+		await flushPromises();
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(sentBody()).toEqual({ message: 'hello', hostContext: { timeZone: 'Europe/Helsinki' } });
+	});
+
+	it('leaves the host context out of the request body when it is not set', async () => {
+		const { fetchMock, sentBody } = mockChatFetch();
+		const hook = buildHook();
+
+		await hook.sendMessage('hello');
+		await flushPromises();
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(sentBody()).toEqual({ message: 'hello' });
+		expect(sentBody()).not.toHaveProperty('hostContext');
+	});
+});
