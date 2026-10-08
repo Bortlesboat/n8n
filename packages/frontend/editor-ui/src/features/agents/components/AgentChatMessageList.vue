@@ -11,6 +11,9 @@ import { getMessageInteractives, isRecord } from '@/features/ai/shared/agentsCha
 import {
 	AGENTS_CHAT_INTERACTION_EXTENSIONS,
 	findToolResultRenderer,
+	getHostEventItems,
+	isHiddenHostEventOnlyMessage,
+	type AgentsChatHostEventItems,
 	type AgentsChatToolResultRenderer,
 } from '@/features/ai/shared/agentsChat/interactionRegistry';
 import {
@@ -187,7 +190,56 @@ function getHostToolResults(
 
 const scrollRef = useTemplateRef<HTMLDivElement>('scrollRef');
 
-const displayGroups = computed(() => buildAgentPlanDisplayGroups(props.messages));
+/**
+ * Messages that carry only host events, and that no host extension renders,
+ * would show as empty bubbles. Drop them before grouping.
+ */
+const visibleMessages = computed(() => {
+	if (!props.messages.some((message) => message.hostEvents?.length)) return props.messages;
+	const extensions = interactionExtensions?.value ?? [];
+	return props.messages.filter((message) => !isHiddenHostEventOnlyMessage(message, extensions));
+});
+
+const displayGroups = computed(() => buildAgentPlanDisplayGroups(visibleMessages.value));
+
+const EMPTY_HOST_EVENT_ITEMS: AgentsChatHostEventItems = { start: [], end: [], transient: [] };
+
+/**
+ * Host event components of an assistant group, by placement. `transient`
+ * events show only while the turn has no text.
+ */
+const hostEventItems = computed(() => {
+	const itemsByGroupId = new Map<string, AgentsChatHostEventItems>();
+	const extensions = interactionExtensions?.value ?? [];
+	if (extensions.length === 0) return itemsByGroupId;
+	for (const group of displayGroups.value) {
+		if (group.kind === 'toolRun') {
+			if (!group.hostEvents?.length) continue;
+			itemsByGroupId.set(
+				group.id,
+				getHostEventItems(group.hostEvents, extensions, {
+					hasText: !!group.finalMessage?.content.trim(),
+				}),
+			);
+		} else if (group.kind === 'message' && group.message.hostEvents?.length) {
+			const { message } = group;
+			itemsByGroupId.set(
+				group.id,
+				getHostEventItems(
+					message.hostEvents?.map((event) => ({ event, message })) ?? [],
+					extensions,
+					{ hasText: !!message.content.trim() },
+				),
+			);
+		}
+	}
+	return itemsByGroupId;
+});
+
+function getGroupHostEventItems(groupId: string): AgentsChatHostEventItems {
+	return hostEventItems.value.get(groupId) ?? EMPTY_HOST_EVENT_ITEMS;
+}
+
 const streamingGroupId = computed(() =>
 	props.messages.at(-1)?.status === CHAT_MESSAGE_STATUS.STREAMING
 		? displayGroups.value.at(-1)?.id
@@ -500,6 +552,15 @@ watch(
 			</div>
 			<div v-else-if="group.kind === 'toolRun'" :class="[$style.message, $style.assistant]">
 				<div :class="$style.content">
+					<div
+						v-for="item in getGroupHostEventItems(group.id).start"
+						:key="`host-event-start-${item.event.id}`"
+						:class="$style.hostEvent"
+						data-testid="agent-chat-host-event"
+						data-placement="start"
+					>
+						<component :is="item.component" :event="item.event" :message="item.message" />
+					</div>
 					<AgentChatToolSteps
 						v-if="getStepToolCalls(group.toolCalls).length"
 						:tool-calls="getStepToolCalls(group.toolCalls)"
@@ -558,6 +619,24 @@ watch(
 						:pending="budgetIncreasePending"
 						@increase="emit('increase-budget', $event)"
 					/>
+					<div
+						v-for="item in getGroupHostEventItems(group.id).end"
+						:key="`host-event-end-${item.event.id}`"
+						:class="$style.hostEvent"
+						data-testid="agent-chat-host-event"
+						data-placement="end"
+					>
+						<component :is="item.component" :event="item.event" :message="item.message" />
+					</div>
+					<div
+						v-for="item in getGroupHostEventItems(group.id).transient"
+						:key="`host-event-transient-${item.event.id}`"
+						:class="$style.hostEvent"
+						data-testid="agent-chat-host-event"
+						data-placement="transient"
+					>
+						<component :is="item.component" :event="item.event" :message="item.message" />
+					</div>
 					<AiThinkingBlock
 						v-if="group.thinkingSegments.length"
 						:segments="group.thinkingSegments"
@@ -607,6 +686,15 @@ watch(
 				:class="[$style.message, group.message.role === 'user' ? $style.user : $style.assistant]"
 			>
 				<div :class="$style.content">
+					<div
+						v-for="item in getGroupHostEventItems(group.id).start"
+						:key="`host-event-start-${item.event.id}`"
+						:class="$style.hostEvent"
+						data-testid="agent-chat-host-event"
+						data-placement="start"
+					>
+						<component :is="item.component" :event="item.event" :message="item.message" />
+					</div>
 					<AgentChatToolSteps
 						v-if="getStepToolCalls(group.message.toolCalls ?? []).length"
 						:tool-calls="getStepToolCalls(group.message.toolCalls ?? [])"
@@ -689,6 +777,24 @@ watch(
 							@increase="emit('increase-budget', $event)"
 						/>
 					</template>
+					<div
+						v-for="item in getGroupHostEventItems(group.id).end"
+						:key="`host-event-end-${item.event.id}`"
+						:class="$style.hostEvent"
+						data-testid="agent-chat-host-event"
+						data-placement="end"
+					>
+						<component :is="item.component" :event="item.event" :message="item.message" />
+					</div>
+					<div
+						v-for="item in getGroupHostEventItems(group.id).transient"
+						:key="`host-event-transient-${item.event.id}`"
+						:class="$style.hostEvent"
+						data-testid="agent-chat-host-event"
+						data-placement="transient"
+					>
+						<component :is="item.component" :event="item.event" :message="item.message" />
+					</div>
 					<N8nCallout
 						v-if="group.id === changeRequestGroupId"
 						theme="info"
@@ -849,6 +955,12 @@ watch(
 	display: flex;
 	flex-direction: column;
 	gap: var(--spacing--2xs);
+	margin-top: var(--spacing--2xs);
+	margin-bottom: var(--spacing--2xs);
+}
+
+/* A host component for a host event of the assistant message. */
+.hostEvent {
 	margin-top: var(--spacing--2xs);
 	margin-bottom: var(--spacing--2xs);
 }
