@@ -30,6 +30,19 @@ describe('findToolResultRenderer', () => {
 		});
 	});
 
+	it('renders the result of an extension that has no card fields', () => {
+		const resultOnly: AgentsChatInteractionExtension = {
+			key: 'result_only',
+			matchToolResult: (toolCall) => toolCall.tool === TEST_RESULT_TOOL_NAME,
+			resultComponent: TestToolResult,
+		};
+
+		expect(findToolResultRenderer(finishedCall, [resultOnly])).toEqual({
+			key: 'result_only',
+			component: TestToolResult,
+		});
+	});
+
 	it('returns undefined without extensions', () => {
 		expect(findToolResultRenderer(finishedCall, [])).toBeUndefined();
 	});

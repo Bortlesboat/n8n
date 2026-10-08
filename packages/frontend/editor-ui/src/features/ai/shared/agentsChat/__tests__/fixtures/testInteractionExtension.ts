@@ -76,11 +76,9 @@ export const TestToolResult = defineComponent({
 	},
 });
 
-/** A host extension that only renders tool results. It has no card. */
+/** A host extension that only renders tool results. It has no card fields. */
 export const testToolResultExtension: AgentsChatInteractionExtension = {
 	key: TEST_RESULT_EXTENSION_KEY,
-	parse: () => undefined,
-	component: TestToolResult,
 	matchToolResult: (toolCall) => toolCall.tool === TEST_RESULT_TOOL_NAME,
 	resultComponent: TestToolResult,
 };
