@@ -288,7 +288,7 @@ oneOf:
       - type
       - nodeType
       - typeVersion
-      - usedByWorkflows
+      - usedBy
     properties:
       type:
         type: string
@@ -300,18 +300,18 @@ oneOf:
       typeVersion:
         type: number
         description: Node type version the package's workflows use.
-      usedByWorkflows:
+      usedBy:
         type: array
         items:
-          type: string
-        description: Package workflow ids that use this node type and version.
+          $ref: './packageRequirementConsumer.yml'
+        description: Package consumers that use this node type and version.
   - type: object
     description: A credential reference that could not be resolved in the target project.
     required:
       - type
       - kind
       - sourceId
-      - usedByWorkflows
+      - usedBy
     properties:
       type:
         type: string
@@ -338,10 +338,10 @@ oneOf:
         type: string
         description: >
           For `type_mismatch`: the actual type of the resolved target credential.
-      usedByWorkflows:
+      usedBy:
         type: array
         items:
-          type: string
+          $ref: './packageRequirementConsumer.yml'
   - type: object
     description: >
       A tag referenced by the package's workflows that could not be resolved on
@@ -358,7 +358,7 @@ oneOf:
     required:
       - type
       - kind
-      - usedByWorkflows
+      - usedBy
     properties:
       type:
         type: string
@@ -394,13 +394,12 @@ oneOf:
       existingName:
         type: string
         description: 'For `rename-drift`: the current name of the same-id target tag.'
-      usedByWorkflows:
+      usedBy:
         type: array
         items:
-          type: string
+          $ref: './packageRequirementConsumer.yml'
         description: >
-          Package workflow ids (non-skipped) that reference the source tag — not
-          workflows attached to the contested target tag.
+          Package workflows that reference the source tag and are not skipped.
   - type: object
     description: >
       A variable reference that could not be resolved in the target project or the
@@ -408,7 +407,7 @@ oneOf:
     required:
       - type
       - name
-      - usedByWorkflows
+      - usedBy
     properties:
       type:
         type: string
@@ -417,10 +416,10 @@ oneOf:
       name:
         type: string
         description: Requirement name with no match in the target project or global scope.
-      usedByWorkflows:
+      usedBy:
         type: array
         items:
-          type: string
+          $ref: './packageRequirementConsumer.yml'
   - type: object
     description: >
       A variable that resolved in the target project or the global scope, but
@@ -432,7 +431,7 @@ oneOf:
     required:
       - type
       - name
-      - usedByWorkflows
+      - usedBy
     properties:
       type:
         type: string
@@ -446,10 +445,10 @@ oneOf:
         description: >
           Project owning the resolved variable. Absent when it resolved at the
           global scope.
-      usedByWorkflows:
+      usedBy:
         type: array
         items:
-          type: string
+          $ref: './packageRequirementConsumer.yml'
   - type: object
     description: >
       Creating the package's variables under `create-stub` or `create-with-value`
@@ -461,7 +460,7 @@ oneOf:
       - remaining
       - requested
       - names
-      - usedByWorkflows
+      - usedBy
     properties:
       type:
         type: string
@@ -483,11 +482,11 @@ oneOf:
         items:
           type: string
         description: The unique variable names the import would create.
-      usedByWorkflows:
+      usedBy:
         type: array
         items:
-          type: string
-        description: Package workflow ids that reference any of the listed variables.
+          $ref: './packageRequirementConsumer.yml'
+        description: Package consumers that reference any of the listed variables.
   - type: object
     description: >
       A workflow the content-import policy refused. Takes down the whole package

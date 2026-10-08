@@ -471,7 +471,7 @@ describe('POST /n8n-packages/import', () => {
 					type: 'missing-node-type',
 					nodeType: 'n8n-nodes-community.chatBot',
 					typeVersion: 1,
-					usedByWorkflows: ['wf-unknown-node'],
+					usedBy: [{ kind: 'workflow', id: 'wf-unknown-node' }],
 				},
 			],
 		});
