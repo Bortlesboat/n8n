@@ -3,6 +3,7 @@ import {
 	AgentTeamsPackageDto,
 	AgentTeamsProvisionAppDto,
 	AgentTeamsProvisionBotDto,
+	AgentTeamsPublishDto,
 } from '@n8n/api-types';
 import type {
 	CreateTeamsManagerCredentialResponse,
@@ -10,6 +11,7 @@ import type {
 	TeamsCredentialCheck,
 	TeamsManagedSetupState,
 	TeamsAzureSubscription,
+	TeamsCatalogState,
 	TeamsProvisionedAppSummary,
 	TeamsProvisionedBotSummary,
 } from '@n8n/api-types';
@@ -51,6 +53,76 @@ export class AgentTeamsIntegrationsController {
 		private readonly catalogService: TeamsCatalogService,
 		private readonly setupTelemetry: TeamsSetupTelemetryService,
 	) {}
+
+	/**
+	 * Publishes the app to the organisation, or submits it for review when the
+	 * account may not publish directly. Which of the two happened is in the
+	 * state this returns.
+	 */
+	@Post('/:agentId/integrations/teams/publish')
+	@ProjectScope('agent:update')
+	async publishApp(
+		req: AuthenticatedRequest<{ projectId: string }>,
+		_res: Response,
+		@Param('agentId') agentId: string,
+		@Body payload: AgentTeamsPublishDto,
+	): Promise<TeamsCatalogState> {
+		const report = {
+			agentId,
+			projectId: req.params.projectId,
+			userId: req.user.id,
+			step: 'install' as const,
+		};
+		try {
+			const state = await this.catalogService.publish({
+				user: req.user,
+				projectId: req.params.projectId,
+				agentId,
+				managerCredentialId: payload.managerCredentialId,
+				credentialId: payload.credentialId,
+				settings: payload.settings,
+			});
+			// Which route the account actually got is the answer the publish call
+			// gives back. Only two of its four answers are routes, though: an app
+			// Microsoft has not listed yet, or has rejected, took neither.
+			this.setupTelemetry.succeeded({
+				...report,
+				...(state.status === 'published' || state.status === 'submitted'
+					? { installRoute: state.status }
+					: {}),
+			});
+			return state;
+		} catch (error) {
+			this.setupTelemetry.failed(report, error);
+			throw error;
+		}
+	}
+
+	@Get('/:agentId/integrations/teams/catalog')
+	@ProjectScope('agent:update')
+	async getCatalogState(
+		req: AuthenticatedRequest<
+			{ projectId: string },
+			{},
+			{},
+			{ managerCredentialId?: string; credentialId?: string }
+		>,
+		_res: Response,
+		@Param('agentId') agentId: string,
+	): Promise<TeamsCatalogState> {
+		const managerCredentialId = req.query.managerCredentialId;
+		if (typeof managerCredentialId !== 'string' || managerCredentialId.length === 0) {
+			return { status: 'unknown', teamsAppId: null };
+		}
+		const credentialId = req.query.credentialId;
+		return await this.catalogService.getState({
+			user: req.user,
+			projectId: req.params.projectId,
+			agentId,
+			managerCredentialId,
+			...(typeof credentialId === 'string' && credentialId.length > 0 ? { credentialId } : {}),
+		});
+	}
 
 	/**
 	 * Confirms an upload n8n did not perform. Adding the app for yourself happens

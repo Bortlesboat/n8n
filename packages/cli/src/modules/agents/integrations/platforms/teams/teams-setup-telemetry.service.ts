@@ -16,7 +16,7 @@ export interface TeamsSetupStepReport {
 	 * decided in the browser, which reports no step outcome.
 	 */
 	botRoute?: 'provisioned' | 'manual';
-	installRoute?: 'upload';
+	installRoute?: 'published' | 'submitted' | 'upload';
 }
 
 /**

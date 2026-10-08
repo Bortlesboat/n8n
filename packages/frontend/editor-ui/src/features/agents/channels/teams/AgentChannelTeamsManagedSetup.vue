@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import type { AgentTeamsIntegrationSettings, TeamsManagedSetupState } from '@n8n/api-types';
 import {
+	N8nActionDropdown,
 	N8nButton,
 	N8nCallout,
+	N8nIcon,
 	N8nIconButton,
 	N8nInputLabel,
 	N8nOption,
@@ -11,6 +13,7 @@ import {
 	N8nStepper,
 	N8nText,
 } from '@n8n/design-system';
+import { useClipboard } from '@n8n/composables/useClipboard';
 import { getErrorMessage } from '@n8n/utils/errors/get-error-message';
 import { useI18n } from '@n8n/i18n';
 import type { PermissionsRecord } from '@n8n/permissions';
@@ -52,7 +55,10 @@ const emit = defineEmits<{
 	done: [];
 }>();
 
+const TEAMS_MANAGE_APPS_URL = 'https://admin.teams.microsoft.com/policies/manage-apps';
+
 const i18n = useI18n();
+const clipboard = useClipboard();
 const rootStore = useRootStore();
 
 const busy = ref<string | null>(null);
@@ -66,6 +72,7 @@ const STEP_OF_ACTION: Record<string, string> = {
 	connect: 'connect',
 	'create-app': 'create-app',
 	'create-bot': 'create-bot',
+	publish: 'install',
 	download: 'install',
 };
 const errorStepId = ref('');
@@ -79,6 +86,8 @@ const subscriptionId = ref('');
 const subscriptionsChecked = ref(false);
 /** Only true while Azure is actually being asked, so the wait cannot outlive it. */
 const subscriptionsChecking = ref(false);
+/** Set once the approval request has been put on the clipboard. */
+const requestCopied = ref(false);
 const availability = ref<TeamsAvailability>(availabilityFrom());
 
 const selectedCredential = computed(() =>
@@ -96,7 +105,9 @@ const connected = computed(
 const provisionedApp = computed(() => props.runtime.provisionedApp.value);
 const provisionedBot = computed(() => props.runtime.provisionedBot.value);
 const subscriptions = computed(() => props.runtime.subscriptions.value);
+const catalogState = computed(() => props.runtime.catalogState.value);
 const botReady = computed(() => provisionedBot.value !== null);
+const published = computed(() => catalogState.value?.status === 'published');
 
 /** The agent's own name and blurb, which is how it appears in Teams. */
 const identityName = computed(
@@ -120,23 +131,77 @@ type InstallOutcome = 'none' | 'waiting' | 'waitingSlow' | 'skipped';
 const installRoute = ref<InstallRoute>('choose');
 const installOutcome = ref<InstallOutcome>('none');
 
+/**
+ * Spelled out rather than built from the status, so the keys stay greppable
+ * and the unused-key tooling can see them.
+ */
+const CATALOG_STATE_TEXT = {
+	published: 'agents.channels.teams.managed.install.published',
+	submitted: 'agents.channels.teams.managed.install.submitted',
+	rejected: 'agents.channels.teams.managed.install.rejected',
+	unknown: 'agents.channels.teams.managed.install.unknown',
+} as const;
+
+/**
+ * Whether this setup has published yet. The catalogue is read when the step
+ * opens, and before a publish its "not listed" answer is just the truth about
+ * an app nobody published -- not something to report. Downloading the package
+ * does not count: a sideloaded app never enters the catalogue, so its silence
+ * about one says nothing about the upload being waited for.
+ */
+const hasPublished = ref(false);
+
 const waiting = computed(
 	() => installOutcome.value === 'waiting' || installOutcome.value === 'waitingSlow',
 );
 
+/**
+ * The two routes are independent, so downloading the package once must not take
+ * publishing away. Only a pending review drops an item: it is the one state
+ * that cannot take another submission.
+ */
+const installMenuItems = computed(() => {
+	const items = [
+		{
+			id: 'for-me',
+			testId: 'teams-install-download-package',
+			label: i18n.baseText(
+				installRoute.value === 'downloaded'
+					? 'agents.channels.teams.managed.install.downloadAgain'
+					: 'agents.channels.teams.managed.install.forMe',
+			),
+			description: i18n.baseText('agents.channels.teams.managed.install.forMeHint'),
+		},
+	];
+	if (catalogState.value?.status !== 'submitted') {
+		items.push({
+			id: 'publish',
+			testId: 'teams-publish',
+			label: i18n.baseText('agents.channels.teams.managed.install.publish'),
+			description: i18n.baseText('agents.channels.teams.managed.install.publishHintShort'),
+		});
+	}
+	return items;
+});
+
+const onInstallMenu = async (id: string) =>
+	id === 'publish' ? await publishApp() : await downloadPackage();
+
 /** What is running, for the status row the step shows in place of the menu. */
 const installProgress = computed(() => {
+	if (busy.value === 'publish')
+		return i18n.baseText('agents.channels.teams.managed.install.publishing');
 	if (busy.value === 'download')
 		return i18n.baseText('agents.channels.teams.managed.install.preparing');
 	return '';
 });
 
 /**
- * Publishing and installing are separate: publishing puts the app in the
- * organisation catalogue, installing adds it to your own Teams. Only the add
- * finishes the step, because only it proves the agent is reachable.
+ * Two routes finish this step. Publishing puts the app in the organisation's
+ * catalogue and hands the rest to Microsoft; uploading the package puts it in
+ * your own Teams straight away. Neither waits on the other.
  */
-const installDone = computed(() => props.runtime.installed.value);
+const installDone = computed(() => props.runtime.installed.value || published.value);
 
 const connectSummary = computed(() =>
 	selectedCredential.value?.organizationName
@@ -206,7 +271,9 @@ const steps = computed(() => {
 			title: i18n.baseText(
 				status.install !== 'complete'
 					? 'agents.channels.teams.managed.install.title'
-					: 'agents.channels.teams.managed.install.titleDone',
+					: published.value
+						? 'agents.channels.teams.managed.install.titleDonePublished'
+						: 'agents.channels.teams.managed.install.titleDone',
 			),
 			description: i18n.baseText('agents.channels.teams.managed.install.description'),
 		},
@@ -384,15 +451,26 @@ const provisionBot = async () =>
 const persisted = ref(false);
 
 /**
+ * Publishes, and stops there. Adding the app to someone's Teams is the step
+ * after, and the design keeps the two apart: publishing is a decision about
+ * the organisation, adding is one about your own account.
+ */
+const publishApp = async () =>
+	await run('publish', async () => {
+		await props.runtime.publishApp(currentSettings.value);
+		// Only once it went through: set before, a refused publish leaves the
+		// catalogue's "not listed yet" sitting beside the error explaining why.
+		hasPublished.value = true;
+		persistChannel();
+	});
+
+/**
  * Binds the provisioned credential to the agent, which is what starts it.
  *
- * The package route calls this once it has been handed over: the setup is
- * finished from n8n's side even though the upload happens in Teams. It does
- * not close the dialog, because the upload is still to come.
- *
- * The credential is re-announced first, because saving reads it from the
- * view's model and nothing else guarantees the view heard about it in this
- * session.
+ * Every route that puts the app in front of someone calls this -- publishing
+ * and the package alike -- because each finishes the setup on its own, and
+ * which of them a tenant allows is not ours to choose. None of them closes the
+ * dialog: another may still follow.
  */
 function persistChannel() {
 	emit('persist');
@@ -495,6 +573,23 @@ onBeforeUnmount(() => {
 	unmounted = true;
 	stopWaiting();
 });
+
+/**
+ * Puts the whole request on the clipboard rather than on the screen: the user
+ * pastes it to whoever can approve it, and has nothing to compose or look up.
+ *
+ * The link is the Manage apps page, which is as deep as Microsoft goes — there
+ * is no URL for one pending app — so the app's name carries the rest. The
+ * administrator finds it under Pending approval.
+ */
+async function copyApprovalRequest() {
+	await clipboard.copy(
+		i18n.baseText('agents.channels.teams.managed.install.approvalRequest', {
+			interpolate: { app: provisionedApp.value?.appName ?? '', url: TEAMS_MANAGE_APPS_URL },
+		}),
+	);
+	requestCopied.value = true;
+}
 
 /**
  * Hands the setup to the manual flow, for the walls this one cannot climb: a
@@ -613,8 +708,40 @@ const downloadPackage = async () =>
 						light green in dark mode, which left the row unreadable.
 					-->
 					<N8nCallout theme="success" :class="$style.doneCallout" data-testid="teams-install-done">
-						{{ i18n.baseText('agents.channels.teams.managed.install.done') }}
+						{{
+							i18n.baseText(
+								runtime.installed.value
+									? 'agents.channels.teams.managed.install.done'
+									: 'agents.channels.teams.managed.install.donePublished',
+							)
+						}}
 					</N8nCallout>
+					<!--
+						A published app is in nobody's Teams yet, so the package stays
+						reachable here: uploading it needs no catalogue entry and so
+						works through the day Microsoft takes to make the published one
+						addable.
+					-->
+					<AgentChannelTeamsIdentityCard
+						v-if="!runtime.installed.value"
+						:name="identityName"
+						:description="identityDescription"
+						:tooltip="i18n.baseText('agents.channels.teams.managed.install.identityTooltip')"
+						ready
+					>
+						<template #action>
+							<N8nButton
+								variant="outline"
+								size="medium"
+								:loading="busy === 'download'"
+								:disabled="busy !== null"
+								data-testid="teams-install-download-package"
+								@click="downloadPackage"
+							>
+								{{ i18n.baseText('agents.channels.teams.managed.install.forMe') }}
+							</N8nButton>
+						</template>
+					</AgentChannelTeamsIdentityCard>
 				</div>
 
 				<div v-else-if="step.id === 'connect'" :class="$style.stepContent">
@@ -872,30 +999,81 @@ const downloadPackage = async () =>
 									size="medium"
 									data-testid="teams-install-spinner"
 								/>
-								<N8nButton
-									v-else-if="installRoute === 'downloaded'"
-									variant="outline"
-									size="medium"
-									:loading="busy === 'download'"
-									:disabled="busy !== null"
-									data-testid="teams-install-download-package"
-									@click="downloadPackage"
-								>
-									{{ i18n.baseText('agents.channels.teams.managed.install.downloadAgain') }}
-								</N8nButton>
-								<N8nButton
+								<N8nActionDropdown
 									v-else
-									variant="solid"
-									size="medium"
-									:loading="busy === 'download'"
-									:disabled="busy !== null"
-									data-testid="teams-install-download-package"
-									@click="downloadPackage"
+									:items="installMenuItems"
+									placement="bottom-end"
+									:teleported="false"
+									@select="onInstallMenu"
 								>
-									{{ i18n.baseText('agents.channels.teams.managed.install.forMe') }}
-								</N8nButton>
+									<template #activator>
+										<N8nButton
+											variant="solid"
+											size="medium"
+											:disabled="busy !== null"
+											data-testid="teams-install-menu"
+										>
+											{{ i18n.baseText('agents.channels.teams.managed.install.menu') }}
+											<N8nIcon icon="chevron-down" size="small" />
+										</N8nButton>
+									</template>
+								</N8nActionDropdown>
 							</template>
 						</AgentChannelTeamsIdentityCard>
+					</template>
+
+					<!--
+						Nothing is said about the catalogue while a call to it is in
+						flight: what it last answered is about to be replaced, and
+						"Microsoft has not listed the app yet" beside a publish that is
+						still running reads as the answer to that publish.
+					-->
+					<template
+						v-if="
+							!installProgress &&
+							catalogState &&
+							(catalogState.status !== 'unknown' || hasPublished)
+						"
+					>
+						<!--
+							A review is a wall, not a status line: nobody can add the app
+							until someone acts. The state the user can do nothing about
+							stays quiet text.
+						-->
+						<N8nCallout
+							v-if="catalogState.status === 'submitted'"
+							theme="warning"
+							data-testid="teams-catalog-state"
+						>
+							{{ i18n.baseText('agents.channels.teams.managed.install.submitted') }}
+						</N8nCallout>
+						<N8nText v-else size="small" color="text-light" data-testid="teams-catalog-state">
+							{{ i18n.baseText(CATALOG_STATE_TEXT[catalogState.status]) }}
+						</N8nText>
+						<!-- Said here because the one-off fix is an administrator's to make. -->
+						<N8nText
+							v-if="catalogState.status === 'submitted'"
+							size="small"
+							color="text-light"
+							data-testid="teams-catalog-submitted-why"
+						>
+							{{ i18n.baseText('agents.channels.teams.managed.install.submittedWhy') }}
+						</N8nText>
+						<N8nButton
+							v-if="catalogState.status === 'submitted'"
+							variant="ghost"
+							size="small"
+							data-testid="teams-copy-approval-request"
+							@click="copyApprovalRequest"
+						>
+							{{
+								i18n.baseText(
+									requestCopied
+										? 'agents.channels.teams.managed.install.approvalRequestCopied'
+										: 'agents.channels.teams.managed.install.copyApprovalRequest',
+								)
+							}}
+						</N8nButton>
 					</template>
 
 					<!--
