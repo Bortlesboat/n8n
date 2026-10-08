@@ -386,6 +386,12 @@ export class AgentTeamsProvisionBotDto extends Z.class({
 	subscriptionId: microsoftId,
 }) {}
 
+export class AgentTeamsPublishDto extends Z.class({
+	managerCredentialId: z.string().min(1),
+	credentialId: z.string().min(1),
+	settings: AgentTeamsSettingsSchema.optional(),
+}) {}
+
 export class AgentTeamsInstallDto extends Z.class({
 	managerCredentialId: z.string().min(1),
 }) {}

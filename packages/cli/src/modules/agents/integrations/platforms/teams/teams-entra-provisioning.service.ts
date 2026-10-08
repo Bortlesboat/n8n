@@ -433,7 +433,22 @@ export class TeamsEntraProvisioningService {
 		tenantId: string;
 		existingCredential?: CredentialsEntity;
 	}): Promise<string> {
+		// Anything already on the credential is kept. The publish records what it
+		// put in the catalogue here, and that note is the only answer `getState`
+		// has during the day Microsoft can take to list the app -- rebuilding the
+		// data from scratch on a re-run would throw it away.
+		// Raw: the default redacts every password field, and this data is written
+		// straight back -- so a redacted read would store the blanking sentinel
+		// over whatever it did not overwrite.
+		const existingData = input.existingCredential
+			? ((await this.credentialsService.decrypt(input.existingCredential, true)) as Record<
+					string,
+					unknown
+				>)
+			: {};
+
 		const data = {
+			...existingData,
 			tenantId: input.tenantId,
 			clientId: input.app.appId,
 			clientSecret: input.secret.value,

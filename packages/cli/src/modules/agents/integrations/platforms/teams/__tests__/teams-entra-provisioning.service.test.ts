@@ -1,4 +1,5 @@
 import type { CredentialsEntity, User } from '@n8n/db';
+import { CREDENTIAL_BLANKING_VALUE } from 'n8n-workflow';
 import { mock } from 'vitest-mock-extended';
 
 import type { CredentialsFinderService } from '@n8n/backend-services';
@@ -353,6 +354,43 @@ describe('TeamsEntraProvisioningService', () => {
 				'POST',
 				`/applications/${OBJECT_ID}/removePassword`,
 				{ keyId: 'live-1' },
+			);
+		});
+
+		/**
+		 * The publish records which app it put in the catalogue on this very
+		 * credential, and that note is the only answer the setup has while
+		 * Microsoft has not listed the app. A re-run must not lose it.
+		 */
+		it('keeps what the publish recorded on the credential', async () => {
+			credentialsService.decrypt.mockImplementation(
+				async (credential: { id: string }, includeRawData?: boolean) => {
+					if (credential.id !== 'bot-cred-1') return {} as never;
+					const data = {
+						entraAppObjectId: OBJECT_ID,
+						provisionedForAgentId: 'agent-1',
+						publishedTeamsAppId: 'teams-app-1',
+						publishedTeamsAppState: 'published',
+						privateKey: 'pem-1',
+					};
+					// The real `decrypt` blanks every password field unless the caller
+					// asks for the raw data, and this one is written straight back.
+					return (
+						includeRawData ? data : { ...data, privateKey: CREDENTIAL_BLANKING_VALUE }
+					) as never;
+				},
+			);
+
+			await service.provision(options);
+
+			expect(credentialsService.createEncryptedData).toHaveBeenCalledWith(
+				expect.objectContaining({
+					data: expect.objectContaining({
+						publishedTeamsAppId: 'teams-app-1',
+						publishedTeamsAppState: 'published',
+						privateKey: 'pem-1',
+					}),
+				}),
 			);
 		});
 

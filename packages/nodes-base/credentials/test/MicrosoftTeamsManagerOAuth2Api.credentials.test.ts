@@ -35,6 +35,8 @@ describe('MicrosoftTeamsManagerOAuth2Api Credential', () => {
 			expect.arrayContaining([
 				'offline_access',
 				'https://graph.microsoft.com/Application.ReadWrite.All',
+				'https://graph.microsoft.com/AppCatalog.ReadWrite.All',
+				'https://graph.microsoft.com/AppCatalog.Submit',
 				'https://graph.microsoft.com/TeamsAppInstallation.ReadForUser',
 			]),
 		);
@@ -57,16 +59,14 @@ describe('MicrosoftTeamsManagerOAuth2Api Credential', () => {
 	});
 
 	/**
-	 * n8n reads what the user has so the setup can close on an upload it never
-	 * performed. It installs nothing for anyone, so no write over their apps is
-	 * asked for, and no catalogue write either.
+	 * n8n publishes the app and reads back what the user has. It installs
+	 * nothing for anyone, so no write over their apps is asked for.
 	 */
 	it("asks to read the user's apps, not to change them", () => {
 		const scope = String(defaultOf('scope'));
 
 		expect(scope).toContain('TeamsAppInstallation.ReadForUser');
 		expect(scope).not.toContain('TeamsAppInstallation.ReadWrite');
-		expect(scope).not.toContain('AppCatalog');
 	});
 
 	it('keeps a refresh token, without which the Azure token cannot be minted', () => {

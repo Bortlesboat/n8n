@@ -24,6 +24,7 @@ vi.mock('./api', () => ({
 		botId: null,
 		deployToAzureUrl: null,
 		credentialClaimedBy: null,
+		provisionedByN8n: true,
 		defaultDisplayName: 'Agent',
 		defaultDescription: 'An agent',
 	}),
@@ -51,10 +52,14 @@ const buildRuntime = (
 		botSetupState: ref(null),
 		provisionedBot: ref(null),
 		subscriptions: ref([]),
+		catalogState: ref(null),
+		connectedCredentialId: ref(''),
 		installed: ref(false),
 		provisionApp: vi.fn(),
 		loadSubscriptions: vi.fn(),
 		provisionBot: vi.fn(),
+		publishApp: vi.fn(),
+		refreshCatalogState: vi.fn(),
 		checkInstalled: vi.fn().mockResolvedValue(false),
 	};
 };
