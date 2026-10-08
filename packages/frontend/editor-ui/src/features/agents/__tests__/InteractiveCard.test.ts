@@ -86,6 +86,20 @@ describe('InteractiveCard', () => {
 		expect(wrapper.find('[data-testid="test-card-answer"]').attributes('disabled')).toBeDefined();
 	});
 
+	it('renders nothing for an extension without a card component', () => {
+		const wrapper = mount(InteractiveCard, {
+			props: { payload: extensionPayload },
+			global: {
+				provide: {
+					[AGENTS_CHAT_INTERACTION_EXTENSIONS]: computed(() => [{ key: TEST_EXTENSION_KEY }]),
+				},
+			},
+		});
+
+		expect(wrapper.find('[data-testid="test-card"]').exists()).toBe(false);
+		expect(wrapper.text()).toBe('');
+	});
+
 	it('renders nothing for an extension card that the chat does not provide', () => {
 		const wrapper = mount(InteractiveCard, { props: { payload: extensionPayload } });
 

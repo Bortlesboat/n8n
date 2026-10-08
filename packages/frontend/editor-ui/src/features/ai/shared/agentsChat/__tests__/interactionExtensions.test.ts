@@ -6,6 +6,7 @@ import {
 } from '@n8n/api-types';
 
 import { INTERACTION_EXTENSION_TOOL_NAME, TOOL_CALL_STATE } from '../constants';
+import type { AgentsChatInteractionExtension } from '../interactionRegistry';
 import {
 	applyOpenSuspensions,
 	convertDbMessages,
@@ -77,6 +78,15 @@ describe('rebuildInteractiveFromHistory — interaction extensions', () => {
 
 	it('does not map the payload without the extension', () => {
 		expect(rebuildInteractiveFromHistory(suspendedToolCall)).toBeUndefined();
+	});
+
+	it('ignores an extension without card fields', () => {
+		const withoutCard: AgentsChatInteractionExtension = { key: 'no_card' };
+
+		expect(rebuildInteractiveFromHistory(suspendedToolCall, [withoutCard])).toBeUndefined();
+		expect(
+			rebuildInteractiveFromHistory(suspendedToolCall, [withoutCard, ...testInteractionExtensions]),
+		).toMatchObject({ extensionKey: TEST_EXTENSION_KEY });
 	});
 
 	it('still prefers the generic approval card for approval payloads', () => {

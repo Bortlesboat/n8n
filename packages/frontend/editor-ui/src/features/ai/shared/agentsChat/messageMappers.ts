@@ -160,6 +160,7 @@ function isDeclinedToolOutput(value: unknown): boolean {
  *
  * Host extensions are tried after the generic approval card, so a host cannot
  * take over a tool approval. Without extensions, no extension card is mapped.
+ * Extensions without `parse` have no card, so the mapper skips them.
  *
  * Returns `undefined` when the tool name isn't interactive or input parsing fails.
  */
@@ -185,7 +186,7 @@ export function rebuildInteractiveFromHistory(
 	}
 
 	for (const extension of extensions) {
-		const input = extension.parse(tc);
+		const input = extension.parse?.(tc);
 		if (input === undefined) continue;
 		const resolved = tc.output !== undefined;
 		return {

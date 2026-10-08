@@ -67,19 +67,24 @@ const extensions = inject(AGENTS_CHAT_INTERACTION_EXTENSIONS, undefined);
 /**
  * The host extensions of the chat render their own cards, keyed by
  * `extensionKey`. A card without a matching extension renders nothing.
+ * Extensions without `component` have no card, so they add no renderer.
  */
 const interactiveRenderers = computed<AgentsChatInteractionRenderer[]>(() => [
 	...builtInRenderers,
-	...(extensions?.value ?? []).map(
-		(extension): AgentsChatInteractionRenderer => ({
-			key: extension.key,
-			component: extension.component,
-			matches: (payload) =>
-				payload.toolName === INTERACTION_EXTENSION_TOOL_NAME &&
-				payload.extensionKey === extension.key,
-			getProps: (payload) => extension.getProps?.(payload.input) ?? { input: payload.input },
-		}),
-	),
+	...(extensions?.value ?? []).flatMap((extension): AgentsChatInteractionRenderer[] => {
+		const { component } = extension;
+		if (!component) return [];
+		return [
+			{
+				key: extension.key,
+				component,
+				matches: (payload) =>
+					payload.toolName === INTERACTION_EXTENSION_TOOL_NAME &&
+					payload.extensionKey === extension.key,
+				getProps: (payload) => extension.getProps?.(payload.input) ?? { input: payload.input },
+			},
+		];
+	}),
 ]);
 
 function onSubmit(resumeData: unknown) {
