@@ -1027,9 +1027,7 @@ async function onSubmit(): Promise<SubmitResult> {
 			consumeQueuedExternalMessage(text);
 			trackSentToN8nChat(hadNoMessagesBeforeSend);
 		};
-		const sending = hostContext
-			? sendMessage(text, sentFiles, onAccepted, hostContext)
-			: sendMessage(text, sentFiles, onAccepted);
+		const sending = sendMessage(text, sentFiles, onAccepted, hostContext);
 		isPreparingToSend.value = false;
 		const result = await sending;
 		// A send the server never accepted (busy, failed, lost) won't bring the real

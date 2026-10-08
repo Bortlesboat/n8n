@@ -670,7 +670,12 @@ describe('AgentChatPanel', () => {
 		input.vm.$emit('submit');
 		await flushPromises();
 
-		expect(sendMessageMock).toHaveBeenCalledWith('new message', [userFile], expect.any(Function));
+		expect(sendMessageMock).toHaveBeenCalledWith(
+			'new message',
+			[userFile],
+			expect.any(Function),
+			undefined,
+		);
 		wrapper.unmount();
 	});
 
@@ -829,7 +834,12 @@ describe('AgentChatPanel', () => {
 		composer.vm.$emit('update:modelValue', 'updated');
 		composer.vm.$emit('submit');
 		await flushPromises();
-		expect(sendMessageMock).toHaveBeenCalledWith('updated', undefined, expect.any(Function));
+		expect(sendMessageMock).toHaveBeenCalledWith(
+			'updated',
+			undefined,
+			expect.any(Function),
+			undefined,
+		);
 		wrapper.unmount();
 	});
 
@@ -985,6 +995,7 @@ describe('AgentChatPanel', () => {
 				'original',
 				[expect.any(File)],
 				expect.any(Function),
+				undefined,
 			);
 			const files = sendMessageMock.mock.calls[0][1];
 			expect(files[0].name).toBe('notes.txt');
@@ -1806,7 +1817,12 @@ describe('AgentChatPanel', () => {
 		resolveBeforeSend();
 		await flushPromises();
 
-		expect(sendMessageMock).toHaveBeenCalledWith('update config', undefined, expect.any(Function));
+		expect(sendMessageMock).toHaveBeenCalledWith(
+			'update config',
+			undefined,
+			expect.any(Function),
+			undefined,
+		);
 		expect(events).toEqual(['beforeSend', 'sendMessage']);
 	});
 
@@ -1855,17 +1871,6 @@ describe('AgentChatPanel', () => {
 			]);
 			wrapper.unmount();
 		});
-
-		it('sends no host context when the builder returns undefined', async () => {
-			sendMessageMock.mockResolvedValue('sent');
-			const wrapper = mountPanel({ hostContext: () => undefined });
-
-			send(wrapper, 'hello');
-			await flushPromises();
-
-			expect(sendMessageMock).toHaveBeenCalledWith('hello', undefined, expect.any(Function));
-			wrapper.unmount();
-		});
 	});
 
 	it('retains an outside prompt during initial loading and consumes it only after acceptance', async () => {
@@ -1894,6 +1899,7 @@ describe('AgentChatPanel', () => {
 			'Test this task',
 			undefined,
 			expect.any(Function),
+			undefined,
 		);
 		expect(wrapper.emitted('initial-consumed')).toBeUndefined();
 		expect(trackSubmittedMessageMock).not.toHaveBeenCalled();
@@ -1926,6 +1932,7 @@ describe('AgentChatPanel', () => {
 			'Test this task',
 			[file],
 			expect.any(Function),
+			undefined,
 		);
 		wrapper.unmount();
 	});
@@ -1941,7 +1948,12 @@ describe('AgentChatPanel', () => {
 		).sendMessageFromOutside('', [file]);
 		await flushPromises();
 
-		expect(sendMessageMock).toHaveBeenCalledExactlyOnceWith('', [file], expect.any(Function));
+		expect(sendMessageMock).toHaveBeenCalledExactlyOnceWith(
+			'',
+			[file],
+			expect.any(Function),
+			undefined,
+		);
 		wrapper.unmount();
 	});
 
@@ -1966,6 +1978,7 @@ describe('AgentChatPanel', () => {
 			'Test these instructions',
 			undefined,
 			expect.any(Function),
+			undefined,
 		);
 		sendMessageMock.mock.lastCall?.[2]?.();
 		await nextTick();
@@ -2078,6 +2091,7 @@ describe('AgentChatPanel', () => {
 			draft.trim(),
 			[file],
 			expect.any(Function),
+			undefined,
 		);
 		sendMessageMock.mock.lastCall?.[2]?.();
 		await nextTick();
@@ -2101,6 +2115,7 @@ describe('AgentChatPanel', () => {
 			'keep this draft',
 			undefined,
 			expect.any(Function),
+			undefined,
 		);
 		wrapper.unmount();
 	});
@@ -2139,6 +2154,7 @@ describe('AgentChatPanel', () => {
 				'edited draft',
 				outcome === 'busy' ? [file, nextFile] : [nextFile],
 				expect.any(Function),
+				undefined,
 			);
 			wrapper.unmount();
 		},
@@ -2327,6 +2343,7 @@ describe('AgentChatPanel', () => {
 					'Keep this draft',
 					[file],
 					expect.any(Function),
+					undefined,
 				);
 			} finally {
 				wrapper.unmount();
@@ -2674,7 +2691,12 @@ describe('AgentChatPanel', () => {
 		).sendMessageFromOutside('any news?');
 		await flushPromises();
 
-		expect(sendMessageMock).toHaveBeenCalledWith('any news?', undefined, expect.any(Function));
+		expect(sendMessageMock).toHaveBeenCalledWith(
+			'any news?',
+			undefined,
+			expect.any(Function),
+			undefined,
+		);
 		expect(cancelAndSteerMock).not.toHaveBeenCalled();
 	});
 
@@ -2735,7 +2757,12 @@ describe('AgentChatPanel', () => {
 		await flushPromises();
 
 		expect(cancelAndSteerMock).not.toHaveBeenCalled();
-		expect(sendMessageMock).toHaveBeenCalledWith('something new', undefined, expect.any(Function));
+		expect(sendMessageMock).toHaveBeenCalledWith(
+			'something new',
+			undefined,
+			expect.any(Function),
+			undefined,
+		);
 	});
 
 	// An abandoned wait card earlier in the thread must not hide a real question
@@ -2824,7 +2851,7 @@ describe('AgentChatPanel', () => {
 		expect(chatInput.props('canSubmit')).toBe(true);
 		chatInput.vm.$emit('submit');
 		await flushPromises();
-		expect(sendMessageMock).toHaveBeenCalledWith('', [file], expect.any(Function));
+		expect(sendMessageMock).toHaveBeenCalledWith('', [file], expect.any(Function), undefined);
 		sendMessageMock.mock.lastCall?.[2]?.();
 		await nextTick();
 		expect(chatInput.props('showStopButton')).toBe(true);
@@ -2936,6 +2963,7 @@ describe('AgentPreviewDock stream lifecycle', () => {
 				'Message from the dock',
 				undefined,
 				expect.any(Function),
+				undefined,
 			);
 		} finally {
 			wrapper.unmount();

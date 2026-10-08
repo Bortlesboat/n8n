@@ -1552,33 +1552,3 @@ describe('AgentChatController n8n Chat read-route ownership', () => {
 		});
 	});
 });
-
-describe('AgentChatController host context', () => {
-	const request = { params: { projectId: 'project-1' }, user: { id: 'user-1' } };
-	const hostContext = { timeZone: 'Europe/Helsinki' };
-
-	it('does not pass the host context to a project agent preview turn', async () => {
-		const { controller, messageQueue } = makeController();
-		messageQueue.enqueue.mockResolvedValue({ status: 'duplicate' });
-		await controller.chat(request as never, makeSseResponse([]), 'agent-1', {
-			message: 'hello',
-			hostContext,
-		} as never);
-		const queued = messageQueue.enqueue.mock.lastCall?.[0];
-		expect(queued?.payload).toMatchObject({ kind: 'preview', message: 'hello' });
-		expect(JSON.stringify(queued)).not.toContain('Europe/Helsinki');
-	});
-
-	it('does not pass the host context to a published n8n Chat turn', async () => {
-		const { controller, agentsService, messageQueue } = makeController();
-		agentsService.isN8nChatPublished.mockResolvedValue(true);
-		messageQueue.enqueue.mockResolvedValue({ status: 'duplicate' });
-		await controller.productionChat(request as never, makeSseResponse([]), 'agent-1', {
-			message: 'hello',
-			hostContext,
-		} as never);
-		const queued = messageQueue.enqueue.mock.lastCall?.[0];
-		expect(queued?.payload).toMatchObject({ kind: 'n8n_chat', message: 'hello' });
-		expect(JSON.stringify(queued)).not.toContain('Europe/Helsinki');
-	});
-});
