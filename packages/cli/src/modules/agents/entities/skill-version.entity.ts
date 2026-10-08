@@ -1,8 +1,11 @@
 import { JsonColumn, WithTimestamps } from '@n8n/db';
 import { Column, Entity, Index, PrimaryColumn } from '@n8n/typeorm';
 
-/** SKILL.md frontmatter fields other than name and description, e.g. `allowed-tools`. */
-export type SkillFrontmatter = Record<string, string>;
+/**
+ * SKILL.md frontmatter fields other than name and description, e.g. `allowed-tools`.
+ * The standard allows lists and maps as values, so they are kept as given.
+ */
+export type SkillFrontmatter = Record<string, unknown>;
 
 /**
  * Content of a skill. `version` NULL is the editable draft (one per skill); Save
