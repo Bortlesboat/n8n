@@ -8,14 +8,21 @@ import { computed, ref } from 'vue';
 import { SCOPE_LABEL_KEY } from '../type-availability-policies.constants';
 import ContactInstanceAdminModal from './ContactInstanceAdminModal.vue';
 
-const props = defineProps<{
-	nodeTypeName: string;
-	scope?: NodeTypeAvailabilityScope;
-	/** The list row the popover explains. It opens beside this element, not beside the lock. */
-	anchor?: MaybeElement;
-	/** Keyboard-active without DOM focus, such as a virtual list selection. */
-	active?: boolean;
-}>();
+const props = withDefaults(
+	defineProps<{
+		nodeTypeName: string;
+		scope?: NodeTypeAvailabilityScope;
+		/** The list row the popover explains. It opens beside this element, not beside the lock. */
+		anchor?: MaybeElement;
+		/** Keyboard-active without DOM focus, such as a virtual list selection. */
+		active?: boolean;
+		/** The marker icon. Inline text uses the help icon, list rows the lock. */
+		icon?: 'lock' | 'circle-help';
+		/** Where the card opens. Rows have room beside them, inline text opens below. */
+		side?: 'left' | 'bottom';
+	}>(),
+	{ icon: 'lock', side: 'left' },
+);
 
 /** Leaving waits this long before closing, so the pointer can cross the gap to the popover. */
 const HOVER_GRACE_MS = 200;
@@ -24,12 +31,15 @@ const i18n = useI18n();
 
 const anchorElement = computed(() => unrefElement(props.anchor) ?? undefined);
 const contentRef = ref<HTMLElement | null>(null);
-const anchorHovered = useElementHover(anchorElement, { delayLeave: HOVER_GRACE_MS });
+const markerRef = ref<HTMLElement | null>(null);
+// Without a row to anchor to, the marker itself opens the card.
+const hoverTarget = computed(() => anchorElement.value ?? markerRef.value ?? undefined);
+const anchorHovered = useElementHover(hoverTarget, { delayLeave: HOVER_GRACE_MS });
 const contentHovered = useElementHover(contentRef, { delayLeave: HOVER_GRACE_MS });
 const isContactAdminOpen = ref(false);
 // Content is teleported, so focus in it is outside the anchor.
 // Close for the contact-admin dialog, which this would otherwise cover.
-const { focused: anchorFocused } = useFocusWithin(anchorElement);
+const { focused: anchorFocused } = useFocusWithin(hoverTarget);
 const { focused: contentFocused } = useFocusWithin(contentRef);
 const open = computed(
 	() =>
@@ -53,9 +63,9 @@ const scopeKey = computed<BaseTextKey>(
 		<!-- The tool pickers render this inside a modal. -->
 		<N8nPopover
 			:open="open"
-			side="left"
+			:side="side"
 			align="center"
-			:side-offset="24"
+			:side-offset="side === 'left' ? 24 : 8"
 			:reference="anchorElement"
 			:suppress-auto-focus="true"
 			:content-class="$style.card"
@@ -64,12 +74,13 @@ const scopeKey = computed<BaseTextKey>(
 		>
 			<template #trigger>
 				<span
+					ref="markerRef"
 					:class="$style.marker"
 					tabindex="0"
 					role="img"
 					:aria-label="i18n.baseText('typeAvailabilityPolicies.restrictedNode.title')"
 				>
-					<N8nIcon icon="lock" size="small" data-test-id="node-restricted-icon" />
+					<N8nIcon :icon="icon" size="small" data-test-id="node-restricted-icon" />
 				</span>
 			</template>
 			<template #content>

@@ -75,6 +75,23 @@ describe('RestrictedNodePopover', () => {
 		expect(screen.getByTestId('node-restricted-popover')).toBeInTheDocument();
 	});
 
+	it('opens when its own marker is hovered while no row anchors it', async () => {
+		renderPopover({ icon: 'circle-help', side: 'bottom' });
+
+		await userEvent.hover(screen.getByTestId('node-restricted-icon'));
+
+		expect(await screen.findByTestId('node-restricted-popover')).toBeInTheDocument();
+		expect(screen.getByText('Restricted on this instance')).toBeInTheDocument();
+	});
+
+	it('opens when its own marker takes focus while no row anchors it', async () => {
+		renderPopover({ icon: 'circle-help', side: 'bottom' });
+
+		await userEvent.tab();
+
+		expect(await screen.findByTestId('node-restricted-popover')).toBeInTheDocument();
+	});
+
 	it('opens while focus is inside the anchor row and closes when focus leaves', async () => {
 		const button = document.createElement('button');
 		anchor.appendChild(button);
