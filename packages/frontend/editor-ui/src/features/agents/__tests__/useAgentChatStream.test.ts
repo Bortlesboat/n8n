@@ -4856,7 +4856,7 @@ describe('useAgentChatStream — n8n Chat channel', () => {
 	});
 });
 
-describe('useAgentChatStream — host context', () => {
+describe('useAgentChatStream — client context', () => {
 	let originalFetch: typeof fetch;
 
 	beforeEach(() => {
@@ -4881,7 +4881,7 @@ describe('useAgentChatStream — host context', () => {
 		return { fetchMock, sentBody };
 	}
 
-	it('sends the host context with the message when it is set', async () => {
+	it('sends the client context with the message when it is set', async () => {
 		const { fetchMock, sentBody } = mockChatFetch();
 		const hook = buildHook();
 
@@ -4889,10 +4889,13 @@ describe('useAgentChatStream — host context', () => {
 		await flushPromises();
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
-		expect(sentBody()).toEqual({ message: 'hello', hostContext: { timeZone: 'Europe/Helsinki' } });
+		expect(sentBody()).toEqual({
+			message: 'hello',
+			clientContext: { timeZone: 'Europe/Helsinki' },
+		});
 	});
 
-	it('leaves the host context out of the request body when it is not set', async () => {
+	it('leaves the client context out of the request body when it is not set', async () => {
 		const { fetchMock, sentBody } = mockChatFetch();
 		const hook = buildHook();
 
@@ -4901,6 +4904,6 @@ describe('useAgentChatStream — host context', () => {
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 		expect(sentBody()).toEqual({ message: 'hello' });
-		expect(sentBody()).not.toHaveProperty('hostContext');
+		expect(sentBody()).not.toHaveProperty('clientContext');
 	});
 });

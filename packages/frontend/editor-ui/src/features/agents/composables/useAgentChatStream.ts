@@ -1478,7 +1478,7 @@ export function useAgentChatStream(params: UseAgentChatStreamParams) {
 		files?: File[],
 		onAccepted?: (queueId?: string) => void,
 		userMessage?: ChatMessage,
-		hostContext?: Record<string, unknown>,
+		clientContext?: Record<string, unknown>,
 	) {
 		const target = targetKey();
 		const url = agentChatBaseUrl(
@@ -1495,7 +1495,7 @@ export function useAgentChatStream(params: UseAgentChatStreamParams) {
 			body.messageId = userMessage?.id;
 			if (newSession) body.newSession = true;
 		}
-		if (hostContext) body.hostContext = hostContext;
+		if (clientContext) body.clientContext = clientContext;
 		if (files?.length) {
 			body.attachments = await Promise.all(
 				files.map(async (file) => {
@@ -1664,14 +1664,14 @@ export function useAgentChatStream(params: UseAgentChatStreamParams) {
 	}
 
 	/**
-	 * `hostContext` is per-message context from the host that embeds the chat.
+	 * `clientContext` is per-message context that a system agent's provider reads.
 	 * The request body carries it only when it is set.
 	 */
 	async function sendMessage(
 		text: string,
 		files?: File[],
 		onAccepted?: (queueId?: string) => void,
-		hostContext?: Record<string, unknown>,
+		clientContext?: Record<string, unknown>,
 	): Promise<'sent' | 'busy'> {
 		const trimmed = text.trim();
 		if ((!trimmed && !files?.length) || isSubmitting.value || isLoadingHistory.value) return 'busy';
@@ -1707,7 +1707,7 @@ export function useAgentChatStream(params: UseAgentChatStreamParams) {
 					release();
 				},
 				userMessage,
-				hostContext,
+				clientContext,
 			)
 				.then(({ outcome }) => {
 					release(outcome === 'busy' ? 'busy' : 'sent');

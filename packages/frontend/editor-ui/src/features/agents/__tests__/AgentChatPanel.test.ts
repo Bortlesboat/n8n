@@ -347,7 +347,7 @@ describe('AgentChatPanel', () => {
 			channel: 'chat' | 'n8n-chat';
 			centerEmptyState: boolean;
 			newSession: boolean;
-			hostContext: () => Record<string, unknown> | undefined;
+			clientContext: () => Record<string, unknown> | undefined;
 		}> = {},
 		attachTo?: HTMLElement,
 	) {
@@ -1826,39 +1826,39 @@ describe('AgentChatPanel', () => {
 		expect(events).toEqual(['beforeSend', 'sendMessage']);
 	});
 
-	describe('hostContext', () => {
+	describe('clientContext', () => {
 		const send = (wrapper: ReturnType<typeof mountPanel>, text: string) =>
 			(
 				wrapper.vm as unknown as { sendMessageFromOutside: (message: string) => void }
 			).sendMessageFromOutside(text);
 
-		it('builds the host context after beforeSend and sends it with the message', async () => {
+		it('builds the client context after beforeSend and sends it with the message', async () => {
 			const events: string[] = [];
 			const beforeSend = vi.fn(() => {
 				events.push('beforeSend');
 			});
-			const hostContext = vi.fn(() => {
-				events.push('hostContext');
+			const clientContext = vi.fn(() => {
+				events.push('clientContext');
 				return { timeZone: 'Europe/Helsinki' };
 			});
 			sendMessageMock.mockResolvedValue('sent');
-			const wrapper = mountPanel({ beforeSend, hostContext });
+			const wrapper = mountPanel({ beforeSend, clientContext });
 
 			send(wrapper, 'hello');
 			await flushPromises();
 
-			expect(events).toEqual(['beforeSend', 'hostContext']);
+			expect(events).toEqual(['beforeSend', 'clientContext']);
 			expect(sendMessageMock).toHaveBeenCalledWith('hello', undefined, expect.any(Function), {
 				timeZone: 'Europe/Helsinki',
 			});
 			wrapper.unmount();
 		});
 
-		it('builds a fresh host context for each message', async () => {
+		it('builds a fresh client context for each message', async () => {
 			let count = 0;
-			const hostContext = vi.fn(() => ({ count: ++count }));
+			const clientContext = vi.fn(() => ({ count: ++count }));
 			sendMessageMock.mockResolvedValue('sent');
-			const wrapper = mountPanel({ hostContext });
+			const wrapper = mountPanel({ clientContext });
 
 			send(wrapper, 'first');
 			await flushPromises();
