@@ -1,6 +1,6 @@
 import { Time } from '@n8n/constants';
 import { intervalFromSeconds, SystemTask } from '@n8n/decorators';
-import type { SystemTaskEffects, SystemTaskPlacement, SystemTaskSchedule } from '@n8n/decorators';
+import type { SystemTaskTarget, SystemTaskSchedule } from '@n8n/decorators';
 
 import { N8NCheckpointStorage } from './integrations/n8n-checkpoint-storage';
 import { AgentBackgroundJobService } from './background/agent-background-job.service';
@@ -15,15 +15,14 @@ export class AgentCheckpointPruningTask implements SystemTask {
 
 	readonly schedule: SystemTaskSchedule = intervalFromSeconds(Time.hours.toSeconds);
 
-	readonly effects: SystemTaskEffects = 'idempotent';
-
-	readonly placement: SystemTaskPlacement = {
+	readonly target = {
 		scope: 'cluster',
-		durable: true,
-		runOnTakeover: true,
-	};
-
-	readonly retryDelaySeconds = 30;
+		scheduler: { maxAttempts: 3 },
+		leaderTimer: {
+			runOnTakeover: true,
+			retryDelaySeconds: 30,
+		},
+	} satisfies SystemTaskTarget;
 
 	constructor(
 		private readonly checkpointStorage: N8NCheckpointStorage,
