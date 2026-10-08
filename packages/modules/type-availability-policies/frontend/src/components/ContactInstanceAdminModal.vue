@@ -5,8 +5,10 @@ import { useI18n } from '@n8n/i18n';
 import { useUsersStore } from '@n8n/stores/users.store';
 import { computed, ref, watch } from 'vue';
 
-const { nodeTypeName } = defineProps<{
+const { nodeTypeName, subjectKind = 'node' } = defineProps<{
+	/** Display name of the blocked type: a node, or a credential when `subjectKind` says so. */
 	nodeTypeName: string;
+	subjectKind?: 'node' | 'credential';
 }>();
 
 const open = defineModel<boolean>('open', { default: false });
@@ -18,14 +20,22 @@ const isLoading = ref(false);
 let lookupId = 0;
 
 const description = computed(() =>
-	i18n.baseText('typeAvailabilityPolicies.contactAdmin.description', {
-		interpolate: { nodeType: nodeTypeName },
-	}),
+	subjectKind === 'credential'
+		? i18n.baseText('typeAvailabilityPolicies.contactAdmin.credentialDescription', {
+				interpolate: { credentialType: nodeTypeName },
+			})
+		: i18n.baseText('typeAvailabilityPolicies.contactAdmin.description', {
+				interpolate: { nodeType: nodeTypeName },
+			}),
 );
 const mailSubject = computed(() =>
-	i18n.baseText('typeAvailabilityPolicies.contactAdmin.mailSubject', {
-		interpolate: { nodeType: nodeTypeName },
-	}),
+	subjectKind === 'credential'
+		? i18n.baseText('typeAvailabilityPolicies.contactAdmin.credentialMailSubject', {
+				interpolate: { credentialType: nodeTypeName },
+			})
+		: i18n.baseText('typeAvailabilityPolicies.contactAdmin.mailSubject', {
+				interpolate: { nodeType: nodeTypeName },
+			}),
 );
 
 const owners = computed(() =>

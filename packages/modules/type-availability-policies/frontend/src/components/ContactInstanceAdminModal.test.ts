@@ -61,6 +61,21 @@ describe('ContactInstanceAdminModal', () => {
 		expect(getByText(/request access to 'Slack'/)).toBeInTheDocument();
 	});
 
+	it('builds credential copy when the blocked type is a credential', async () => {
+		setup([owner]);
+		const { findByTestId, getByText } = renderComponent({
+			props: { nodeTypeName: 'Slack API', subjectKind: 'credential' },
+		});
+
+		await findByTestId('contact-instance-admin-list');
+
+		expect(getByText('ada@example.com').closest('a')).toHaveAttribute(
+			'href',
+			'mailto:ada@example.com?subject=Access%20request%20for%20the%20Slack%20API%20credential',
+		);
+		expect(getByText(/which credentials are available/)).toBeInTheDocument();
+	});
+
 	it('keeps loading until the latest owner lookup resolves after a reopen', async () => {
 		const lookups: Array<() => void> = [];
 		setup(

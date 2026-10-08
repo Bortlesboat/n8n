@@ -22,7 +22,11 @@ const reasonText = computed(() =>
 	[...new Set(props.refusal.violations.map((v) => reason(v, props.fallbackName)))].join(' '),
 );
 
-const adminSubject = computed(() => subjectName(props.refusal.violations[0]) ?? props.fallbackName);
+const firstViolation = computed(() => props.refusal.violations[0]);
+const adminSubject = computed(() => subjectName(firstViolation.value) ?? props.fallbackName);
+const adminSubjectKind = computed(() =>
+	firstViolation.value.subjectType === 'credentialType' ? 'credential' : 'node',
+);
 
 onMounted(() => {
 	void loadSubjectTypes(props.refusal).catch(() => undefined);
@@ -40,6 +44,10 @@ onMounted(() => {
 		>
 			{{ i18n.baseText('typeAvailabilityPolicies.restrictedNode.contactAdmin') }}
 		</N8nLink>
-		<ContactInstanceAdminModal v-model:open="isContactAdminOpen" :node-type-name="adminSubject" />
+		<ContactInstanceAdminModal
+			v-model:open="isContactAdminOpen"
+			:node-type-name="adminSubject"
+			:subject-kind="adminSubjectKind"
+		/>
 	</span>
 </template>

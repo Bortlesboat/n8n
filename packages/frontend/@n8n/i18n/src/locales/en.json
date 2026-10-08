@@ -2538,6 +2538,8 @@
 	"typeAvailabilityPolicies.contactAdmin.title": "Instance admins",
 	"typeAvailabilityPolicies.contactAdmin.description": "Instance admins manage which nodes are available. Contact one of them to request access to '{nodeType}'.",
 	"typeAvailabilityPolicies.contactAdmin.mailSubject": "Access request for the {nodeType} node",
+	"typeAvailabilityPolicies.contactAdmin.credentialDescription": "Instance admins manage which credentials are available. Contact one of them to request access to '{credentialType}'.",
+	"typeAvailabilityPolicies.contactAdmin.credentialMailSubject": "Access request for the {credentialType} credential",
 	"typeAvailabilityPolicies.contactAdmin.empty": "No instance admin is listed here. Ask the person who manages this n8n instance.",
 	"typeAvailabilityPolicies.violations.nodeType": "{name} node",
 	"typeAvailabilityPolicies.violations.credentialType": "{name} credential",
