@@ -37,5 +37,6 @@ const i18n = useI18n();
 				@click="emit('sendToAssistant')"
 			/>
 		</N8nTooltip>
+		<slot />
 	</N8nChatActions>
 </template>

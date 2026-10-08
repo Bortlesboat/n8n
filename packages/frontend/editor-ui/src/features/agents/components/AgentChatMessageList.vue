@@ -52,6 +52,11 @@ const emit = defineEmits<{
 	'increase-budget': [payload: { field: 'monthlyBudgetUsd' | 'sessionCostCapUsd'; amount: number }];
 }>();
 
+defineSlots<{
+	/** Host actions for a finished agent reply, next to the default copy action. */
+	'message-actions'?: (props: { message: ChatMessage; executionId?: string }) => unknown;
+}>();
+
 const i18n = useI18n();
 const canSendToAssistant = computed(() =>
 	Boolean(props.canSendToAssistant && props.agentId && props.sessionId),
@@ -543,7 +548,14 @@ watch(
 							:content="getAssistantRunContent(group.id)"
 							:can-send-to-assistant="canSendToAssistant"
 							@send-to-assistant="emit('sendToAssistant')"
-						/>
+						>
+							<slot
+								v-if="group.finalMessage"
+								name="message-actions"
+								:message="group.finalMessage"
+								:execution-id="group.executionId ?? group.finalMessage.executionId"
+							/>
+						</AgentChatMessageActions>
 					</div>
 					<AgentTypingIndicator
 						v-if="
@@ -699,7 +711,13 @@ watch(
 							:content="getAssistantRunContent(group.id)"
 							:can-send-to-assistant="canSendToAssistant"
 							@send-to-assistant="emit('sendToAssistant')"
-						/>
+						>
+							<slot
+								name="message-actions"
+								:message="group.message"
+								:execution-id="group.message.executionId"
+							/>
+						</AgentChatMessageActions>
 						<AgentChatMemoryUsed
 							:memories="getMemoriesUsedInAssistantRun(group.id)"
 							@update:open="setMemoryFooterOpen(group.id, $event)"

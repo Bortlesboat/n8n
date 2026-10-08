@@ -42,6 +42,7 @@ import type {
 	ChatMessageQueueItem,
 } from '@/features/ai/shared/components/chatMessageQueue.types';
 import AttachmentPreview from '@/features/ai/instanceAi/components/AttachmentPreview.vue';
+import InstanceAiResourceChip from '@/features/ai/instanceAi/components/InstanceAiResourceChip.vue';
 import { useAgentChatStream } from '../composables/useAgentChatStream';
 import {
 	findTailOpenInteractive,
@@ -55,6 +56,11 @@ import AgentChatMessageList from './AgentChatMessageList.vue';
 import AgentChatPlan from './AgentChatPlan.vue';
 import { selectLatestAgentPlan } from '../utils/agent-plan';
 import { formatAgentElapsedTime } from '../utils/agent-elapsed-time';
+import {
+	mergeHostContextPatches,
+	type AgentChatComposerAttachment,
+	type AgentChatComposerChip,
+} from '../utils/composer-attachments';
 import type {
 	AgentContinueLoadedEvent,
 	AgentSendToAssistantEvent,
@@ -167,8 +173,14 @@ const emit = defineEmits<{
 	'send-to-assistant': [event?: AgentSendToAssistantEvent];
 	/** The chat's first user message, for a host to title a thread that has no title yet. */
 	'first-user-message': [text: string | undefined];
-	/** The server accepted a new message. Answers to an open card do not emit this. */
-	'message-accepted': [payload: { text: string; files: File[] }];
+	/**
+	 * The server accepted a new message. Answers to an open card do not emit this.
+	 * `hostContext` is the context sent with it: the `hostContext` prop, then
+	 * the patches of the composer chips.
+	 */
+	'message-accepted': [
+		payload: { text: string; files: File[]; hostContext?: Record<string, unknown> },
+	];
 }>();
 
 defineSlots<{
@@ -178,10 +190,24 @@ defineSlots<{
 	'inline-offers'?: () => unknown;
 	/** Content docked above the composer, for example a checklist. */
 	'above-input'?: () => unknown;
-	/** Extra chips at the start of the composer attachment strip. */
-	'composer-attachments'?: () => unknown;
+	/**
+	 * Chips at the start of the composer attachment strip. The default content
+	 * shows the chips from `addComposerAttachment`. A host that renders its own
+	 * chips gets them, and a function to remove one, as slot props.
+	 */
+	'composer-attachments'?: (props: {
+		chips: AgentChatComposerChip[];
+		removeChip: (id: string) => void;
+	}) => unknown;
 	/** Controls at the start of the composer footer. */
 	'footer-start'?: () => unknown;
+	/** Controls at the end of the composer footer, next to the send button. */
+	'composer-actions'?: () => unknown;
+	/**
+	 * Actions for a finished agent reply, next to the default copy action.
+	 * `executionId` is the agent execution of the turn, when it is known.
+	 */
+	'message-actions'?: (props: { message: ChatMessage; executionId?: string }) => unknown;
 	/** Content below the composer. */
 	'input-footer'?: () => unknown;
 }>();
@@ -649,6 +675,10 @@ const backgroundElapsed = computed(() => {
 });
 
 const attachedFiles = ref<File[]>([]);
+// Host chips for the next message. They do not make a draft: a message still
+// needs text or files.
+const composerAttachments = ref<AgentChatComposerAttachment[]>([]);
+const composerChips = computed(() => composerAttachments.value.map(({ chip }) => chip));
 const chatInput = useTemplateRef<InstanceType<typeof ChatInputBase>>('chatInput');
 const backgroundJobCard = useTemplateRef<HTMLDivElement>('backgroundJobCard');
 const backgroundJobStopButton =
@@ -1075,13 +1105,15 @@ async function onSubmit(): Promise<SubmitResult> {
 
 		const installedPreview = previewFirstMessage(text, files) ?? ownedHandoffPreview;
 		let accepted = false;
-		// Build the context after `beforeSend`, so it reflects the host state at send time.
-		const hostContext = props.hostContext?.();
+		// Build the host context after `beforeSend`, so it reflects the host state at
+		// send time. The staged chip patches go on top of it.
+		const sentAttachments = [...composerAttachments.value];
+		const hostContext = mergeHostContextPatches(sentAttachments, props.hostContext?.());
 		const sentFiles = files.length > 0 ? files : undefined;
 		const onAccepted = (queueId?: string) => {
 			accepted = true;
 			if (!isCurrentTarget()) return;
-			emit('message-accepted', { text, files });
+			emit('message-accepted', hostContext ? { text, files, hostContext } : { text, files });
 			if (installedPreview && firstMessagePreview.value === installedPreview) {
 				previewQueueId.value = queueId;
 			}
@@ -1094,6 +1126,9 @@ async function onSubmit(): Promise<SubmitResult> {
 			}
 			if (inputText.value.trim() === text) inputText.value = '';
 			attachedFiles.value = attachedFiles.value.filter((file) => !files.includes(file));
+			composerAttachments.value = composerAttachments.value.filter(
+				(attachment) => !sentAttachments.includes(attachment),
+			);
 			externalAttachedFiles = [];
 			queueExpanded.value = false;
 			consumeQueuedExternalMessage(text);
@@ -1227,6 +1262,53 @@ function openFilePicker() {
 	chatInput.value?.openFilePicker();
 }
 
+/** Returns the composer textarea while it is mounted, for example to anchor a picker. */
+function getInputElement(): HTMLTextAreaElement | undefined {
+	return chatInput.value?.getInputElement();
+}
+
+/**
+ * Inserts text at the composer caret and replaces the selected text. Without a
+ * mounted composer, appends the text to the draft.
+ */
+async function insertText(text: string) {
+	const current = inputText.value;
+	const element = getInputElement();
+	const start = element ? Math.min(element.selectionStart, current.length) : current.length;
+	const end = element ? Math.min(Math.max(element.selectionEnd, start), current.length) : start;
+	inputText.value = current.slice(0, start) + text + current.slice(end);
+	await nextTick();
+	const caret = start + text.length;
+	const updated = getInputElement();
+	if (!updated) return;
+	updated.focus();
+	updated.setSelectionRange(caret, caret);
+}
+
+/**
+ * Stages a host chip in the composer. `hostContextPatch` goes with the next
+ * message that the server accepts, then the chip is removed. Answers to an
+ * open card do not send it.
+ */
+function addComposerAttachment(
+	chip: AgentChatComposerChip,
+	hostContextPatch?: Record<string, unknown>,
+) {
+	const attachment: AgentChatComposerAttachment = { chip, hostContextPatch };
+	const index = composerAttachments.value.findIndex((item) => item.chip.id === chip.id);
+	if (index === -1) {
+		composerAttachments.value = [...composerAttachments.value, attachment];
+		return;
+	}
+	composerAttachments.value = composerAttachments.value.map((item, itemIndex) =>
+		itemIndex === index ? attachment : item,
+	);
+}
+
+function removeComposerAttachment(id: string) {
+	composerAttachments.value = composerAttachments.value.filter((item) => item.chip.id !== id);
+}
+
 defineExpose({
 	focusInput,
 	getConversationMarkdown,
@@ -1235,6 +1317,10 @@ defineExpose({
 	isDirty,
 	setDraft,
 	openFilePicker,
+	getInputElement,
+	insertText,
+	addComposerAttachment,
+	removeComposerAttachment,
 	// Read-only views of the chat state, for hosts that derive their own UI from it.
 	messages: computed(() => messages.value),
 	isStreaming: computed(() => isStreaming.value),
@@ -1336,7 +1422,11 @@ onBeforeUnmount(() => {
 			@resume="resume"
 			@send-to-assistant="emit('send-to-assistant', $event)"
 			@increase-budget="onIncreaseBudget"
-		/>
+		>
+			<template v-if="$slots['message-actions']" #message-actions="actionProps">
+				<slot name="message-actions" v-bind="actionProps" />
+			</template>
+		</AgentChatMessageList>
 
 		<slot name="inline-offers" />
 
@@ -1515,9 +1605,36 @@ onBeforeUnmount(() => {
 							@remove="removeQueuedMessage"
 						/>
 					</template>
-					<template v-if="attachedFiles.length > 0 || $slots['composer-attachments']" #attachments>
+					<template
+						v-if="
+							attachedFiles.length > 0 ||
+							composerAttachments.length > 0 ||
+							$slots['composer-attachments']
+						"
+						#attachments
+					>
 						<div :class="$style.attachmentsStrip">
-							<slot name="composer-attachments" />
+							<slot
+								name="composer-attachments"
+								:chips="composerChips"
+								:remove-chip="removeComposerAttachment"
+							>
+								<InstanceAiResourceChip
+									v-for="chip in composerChips"
+									:key="chip.id"
+									:label="chip.label"
+									:icon="chip.icon"
+									removable
+									:remove-label="
+										locale.baseText('agents.chat.composer.removeChip', {
+											interpolate: { label: chip.label },
+										})
+									"
+									test-id="agent-chat-composer-chip"
+									remove-test-id="agent-chat-composer-chip-remove"
+									@remove="removeComposerAttachment(chip.id)"
+								/>
+							</slot>
 							<AttachmentPreview
 								v-for="(file, index) in attachedFiles"
 								:key="`${file.name}-${index}`"
@@ -1529,6 +1646,9 @@ onBeforeUnmount(() => {
 					</template>
 					<template #footer-start>
 						<slot name="footer-start" />
+					</template>
+					<template v-if="$slots['composer-actions']" #right-actions>
+						<slot name="composer-actions" />
 					</template>
 				</ChatInputBase>
 				<slot name="input-footer" />
