@@ -464,41 +464,6 @@ describe('N8nMemory', () => {
 			expect(writes).toBe(0);
 		});
 
-		it('runs concurrent patches on one thread one after another', async () => {
-			const row = seedThread({ count: 0 });
-			const increment = async () =>
-				await memory.patchThread({
-					threadId: 'thread-1',
-					update: ({ metadata }) => ({
-						metadata: { count: Number(metadata?.count ?? 0) + 1 },
-					}),
-				});
-
-			await Promise.all([increment(), increment(), increment()]);
-
-			expect(jsonParse(row.metadata ?? '{}')).toEqual({ count: 3 });
-			expect(writes).toBe(3);
-		});
-
-		it('keeps the queue moving after an update throws', async () => {
-			const row = seedThread({ count: 0 });
-
-			const failed = memory.patchThread({
-				threadId: 'thread-1',
-				update: () => {
-					throw new Error('update failed');
-				},
-			});
-			const next = memory.patchThread({
-				threadId: 'thread-1',
-				update: () => ({ metadata: { count: 1 } }),
-			});
-
-			await expect(failed).rejects.toThrow('update failed');
-			await expect(next).resolves.toMatchObject({ metadata: { count: 1 } });
-			expect(jsonParse(row.metadata ?? '{}')).toEqual({ count: 1 });
-		});
-
 		it('passes a root operation context to the repository', async () => {
 			seedThread({});
 

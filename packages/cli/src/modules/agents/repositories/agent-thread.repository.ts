@@ -20,7 +20,9 @@ export class AgentThreadRepository extends BaseRepository<AgentThreadEntity> {
 	/**
 	 * Read, update and write the title and metadata of one thread in one
 	 * transaction. On Postgres the row stays locked until the write, so
-	 * concurrent patches from different mains cannot lose an update.
+	 * concurrent patches from different mains cannot lose an update. On SQLite
+	 * (single main only) each transaction holds the single write connection
+	 * until it commits, so patches already run one after another.
 	 *
 	 * `update` gets the locked row and returns the columns to write. When it
 	 * returns `null` or `undefined`, nothing is written and the row is returned
