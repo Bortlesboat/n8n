@@ -34,7 +34,14 @@ export class TrustedSourceIdentityRepository {
 		subject: string,
 		ctx: OperationContext = {},
 	): Promise<TrustedSourceIdentityEntity | null> {
-		throw new Error('not implemented');
+		return await this.store.managerFor(ctx).findOne(TrustedSourceIdentityEntity, {
+			where: { sourceId, subject },
+			relations: {
+				user: {
+					role: true,
+				},
+			},
+		});
 	}
 
 	async touchLastSeen(
@@ -43,6 +50,8 @@ export class TrustedSourceIdentityRepository {
 		seenAt: Date,
 		ctx: OperationContext = {},
 	): Promise<void> {
-		throw new Error('not implemented');
+		await this.store
+			.managerFor(ctx)
+			.update(TrustedSourceIdentityEntity, { sourceId, subject }, { lastSeenAt: seenAt });
 	}
 }
