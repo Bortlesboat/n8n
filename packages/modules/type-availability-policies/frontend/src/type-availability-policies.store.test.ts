@@ -156,25 +156,6 @@ describe('useTypeAvailabilityPoliciesStore', () => {
 			});
 		});
 
-		it('reports every credential type as available while a project switch is in flight', async () => {
-			const deferred = createDeferredPromise<AvailableTypesResponse>();
-			mocks.fetchAvailableTypes
-				.mockResolvedValueOnce(PROJECT_A_RESPONSE)
-				.mockReturnValueOnce(deferred.promise);
-			mocks.fetchAvailableCredentialTypes.mockResolvedValue(PROJECT_A_CREDENTIAL_RESPONSE);
-			const store = useTypeAvailabilityPoliciesStore();
-
-			await store.fetchForProject('project-a');
-			const switching = store.fetchForProject('project-b');
-
-			expect(store.getCredentialTypeAvailability(RESTRICTED_CREDENTIAL).available).toBe(true);
-
-			deferred.resolve(PROJECT_B_RESPONSE);
-			await switching;
-
-			expect(store.getCredentialTypeAvailability(RESTRICTED_CREDENTIAL).available).toBe(false);
-		});
-
 		it('degrades both kinds to available and logs once when the credential request fails', async () => {
 			mocks.fetchAvailableTypes.mockResolvedValue(PROJECT_A_RESPONSE);
 			mocks.fetchAvailableCredentialTypes.mockRejectedValue(new Error('endpoint failure'));
@@ -273,6 +254,7 @@ describe('useTypeAvailabilityPoliciesStore', () => {
 			mocks.fetchAvailableTypes
 				.mockResolvedValueOnce(PROJECT_A_RESPONSE)
 				.mockReturnValueOnce(deferredB.promise);
+			mocks.fetchAvailableCredentialTypes.mockResolvedValue(PROJECT_A_CREDENTIAL_RESPONSE);
 			const store = useTypeAvailabilityPoliciesStore();
 
 			await store.fetchForProject('project-a');
@@ -283,12 +265,14 @@ describe('useTypeAvailabilityPoliciesStore', () => {
 				name: RESTRICTED,
 				available: true,
 			});
+			expect(store.getCredentialTypeAvailability(RESTRICTED_CREDENTIAL).available).toBe(true);
 
 			deferredB.resolve(PROJECT_B_RESPONSE);
 			await pendingB;
 
 			expect(store.isNodeTypeAvailable(ALLOWED)).toBe(false);
 			expect(store.isNodeTypeAvailable(RESTRICTED)).toBe(true);
+			expect(store.getCredentialTypeAvailability(RESTRICTED_CREDENTIAL).available).toBe(false);
 		});
 
 		it('discards a response for a project that is no longer requested', async () => {

@@ -13,6 +13,12 @@ import {
 	TYPE_AVAILABILITY_POLICIES_STORE_ID,
 } from './type-availability-policies.constants';
 
+function toRestrictedMap<T extends { name: string; available: boolean }>(
+	entries: T[],
+): ReadonlyMap<string, T> {
+	return new Map(entries.filter((entry) => !entry.available).map((entry) => [entry.name, entry]));
+}
+
 export const useTypeAvailabilityPoliciesStore = defineStore(
 	TYPE_AVAILABILITY_POLICIES_STORE_ID,
 	() => {
@@ -63,12 +69,8 @@ export const useTypeAvailabilityPoliciesStore = defineStore(
 				]);
 				if (request !== latestRequest) return;
 
-				restrictedNodeTypes.value = new Map(
-					nodeEntries.filter((entry) => !entry.available).map((entry) => [entry.name, entry]),
-				);
-				restrictedCredentialTypes.value = new Map(
-					credentialEntries.filter((entry) => !entry.available).map((entry) => [entry.name, entry]),
-				);
+				restrictedNodeTypes.value = toRestrictedMap(nodeEntries);
+				restrictedCredentialTypes.value = toRestrictedMap(credentialEntries);
 				loadedProjectId.value = projectId;
 			} catch (error) {
 				if (request !== latestRequest) return;
@@ -82,10 +84,17 @@ export const useTypeAvailabilityPoliciesStore = defineStore(
 			}
 		}
 
-		function getNodeTypeAvailability(name: string): NodeTypeAvailability {
+		function getAvailability<T extends { name: string; available: boolean }>(
+			restricted: ReadonlyMap<string, T>,
+			name: string,
+		): T | { name: string; available: true } {
 			if (loadedProjectId.value !== requestedProjectId.value) return { name, available: true };
 
-			return restrictedNodeTypes.value.get(name) ?? { name, available: true };
+			return restricted.get(name) ?? { name, available: true };
+		}
+
+		function getNodeTypeAvailability(name: string): NodeTypeAvailability {
+			return getAvailability(restrictedNodeTypes.value, name);
 		}
 
 		function isNodeTypeAvailable(name: string): boolean {
@@ -93,9 +102,7 @@ export const useTypeAvailabilityPoliciesStore = defineStore(
 		}
 
 		function getCredentialTypeAvailability(name: string): CredentialTypeAvailability {
-			if (loadedProjectId.value !== requestedProjectId.value) return { name, available: true };
-
-			return restrictedCredentialTypes.value.get(name) ?? { name, available: true };
+			return getAvailability(restrictedCredentialTypes.value, name);
 		}
 
 		function reset(): void {
