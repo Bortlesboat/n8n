@@ -54,6 +54,7 @@ import {
 	createRunExecutionData,
 	ExpressionError,
 	OperationalError,
+	UnexpectedError,
 	UserError,
 } from 'n8n-workflow';
 import type { Readable } from 'stream';
@@ -1828,6 +1829,7 @@ describe('executeWebhook establishTriggerIdentity', () => {
 		options: { registrationIdentity?: string; establishesIdentity?: boolean } = {},
 	) => {
 		const { registrationIdentity, establishesIdentity = true } = options;
+		let establishError: unknown;
 
 		resourceRegistry.getByResourceUrl.mockResolvedValue(resource);
 
@@ -1839,7 +1841,12 @@ describe('executeWebhook establishTriggerIdentity', () => {
 
 		webhookService.runWebhook.mockImplementation(async (_workflow, _webhookData, _node, data) => {
 			if (establishesIdentity) {
-				await data.establishTriggerIdentity!('caller-token', RESOURCE_URL);
+				try {
+					await data.establishTriggerIdentity!('caller-token', RESOURCE_URL);
+				} catch (error) {
+					establishError = error;
+					throw error;
+				}
 			}
 			return { workflowData: [[{ json: {} }]] };
 		});
@@ -1886,11 +1893,11 @@ describe('executeWebhook establishTriggerIdentity', () => {
 			{ encryptedRunnerIdentity: registrationIdentity },
 		);
 
-		return additionalData;
+		return { additionalData, establishError };
 	};
 
 	it('seals the resource grant, so the run can still verify itself once the trigger is gone', async () => {
-		const additionalData = await runWithTriggerIdentity(resourceWithGrant);
+		const { additionalData } = await runWithTriggerIdentity(resourceWithGrant);
 
 		expect(resourceRegistry.getByResourceUrl).toHaveBeenCalledWith(RESOURCE_URL);
 		expect(executionContextService.buildTriggerIdentityCredentials).toHaveBeenCalledWith(
@@ -1913,25 +1920,18 @@ describe('executeWebhook establishTriggerIdentity', () => {
 		expect(runData.executionData?.resultData.error).toBeUndefined();
 	});
 
-	it('seals no grant for a resource whose gate cannot be expressed as one', async () => {
-		await runWithTriggerIdentity(resourceWithoutGrant);
+	it.each([
+		['the resource has no grant', resourceWithoutGrant],
+		['the resource has already stopped resolving', undefined],
+	])('refuses to establish an identity when %s', async (_label, resource) => {
+		const { additionalData, establishError } = await runWithTriggerIdentity(resource);
 
-		expect(executionContextService.buildTriggerIdentityCredentials).toHaveBeenCalledWith(
-			'caller-token',
-			RESOURCE_URL,
-			undefined,
-			undefined,
-		);
-	});
-
-	it('seals no grant when the resource has already stopped resolving', async () => {
-		await runWithTriggerIdentity(undefined);
-
-		expect(executionContextService.buildTriggerIdentityCredentials).toHaveBeenCalledWith(
-			'caller-token',
-			RESOURCE_URL,
-			undefined,
-			undefined,
+		expect(establishError).toBeInstanceOf(UnexpectedError);
+		expect(executionContextService.buildTriggerIdentityCredentials).not.toHaveBeenCalled();
+		expect(additionalData.encryptedRunnerIdentity).toBeUndefined();
+		expect(Container.get(Logger).error).toHaveBeenCalledWith(
+			'Cannot establish a trigger identity without a resource grant',
+			{ workflowId: WORKFLOW_ID, resource: RESOURCE_URL },
 		);
 	});
 
@@ -1948,7 +1948,7 @@ describe('executeWebhook establishTriggerIdentity', () => {
 	});
 
 	it('carries the test-webhook registration identity when no node establishes one', async () => {
-		const additionalData = await runWithTriggerIdentity(resourceWithGrant, {
+		const { additionalData } = await runWithTriggerIdentity(resourceWithGrant, {
 			registrationIdentity: 'registration-context',
 			establishesIdentity: false,
 		});
