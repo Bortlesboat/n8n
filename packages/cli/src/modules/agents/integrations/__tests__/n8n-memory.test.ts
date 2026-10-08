@@ -1,7 +1,8 @@
 import { hashEpisodicMemoryEvidence, type NewObservationLogEntry } from '@n8n/agents';
+import type { OperationContext, Transaction } from '@n8n/db';
 import { In, IsNull, Like } from '@n8n/typeorm';
-import type { Mock, Mocked } from 'vitest';
 import { jsonParse } from 'n8n-workflow';
+import type { Mock, Mocked } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 
 import type { AgentMemoryEntryCandidateEntity } from '../../entities/agent-memory-entry-candidate.entity';
@@ -283,42 +284,42 @@ describe('N8nMemory', () => {
 	});
 
 	describe('saveThread — existing row', () => {
+		/** Applies the update to `existing` the way the locked repository write does. */
+		function lockedRow(existing: Partial<AgentThreadEntity>) {
+			const row = { id: 'thread-1', resourceId: 'original-user', ...existing } as AgentThreadEntity;
+			threadRepository.patchThread.mockImplementation(async (threadId, update) => {
+				if (threadId !== row.id) return null;
+				const patch = update(row);
+				if (!patch) return row;
+				if (patch.title !== undefined) row.title = patch.title;
+				if (patch.metadata !== undefined) row.metadata = patch.metadata;
+				return row;
+			});
+			return row;
+		}
+
 		it('preserves the original resourceId instead of overwriting with the caller’s', async () => {
 			// Shared threads (e.g. the test-chat thread keyed by agentId) are
 			// written to by multiple users. The first writer owns the row;
 			// subsequent saves must not re-stamp it with the current caller.
-			const existing = {
-				id: 'thread-1',
-				resourceId: 'original-user',
-				title: null,
-				metadata: null,
-			} as unknown as AgentThreadEntity;
-			threadRepository.findOneBy.mockResolvedValue(existing);
-			threadRepository.save.mockImplementation(async (e) => e as AgentThreadEntity);
+			const row = lockedRow({ title: null, metadata: null });
 
-			await memory.saveThread({
+			const saved = await memory.saveThread({
 				id: 'thread-1',
 				resourceId: 'different-user',
-				title: undefined,
+				title: 'Renamed',
 				metadata: undefined,
 			});
 
-			expect(threadRepository.save).toHaveBeenCalledWith(
-				expect.objectContaining({ id: 'thread-1', resourceId: 'original-user' }),
-			);
+			expect(row.resourceId).toBe('original-user');
+			expect(saved.resourceId).toBe('original-user');
+			expect(threadRepository.save).not.toHaveBeenCalled();
 		});
 
 		it('still ensures the caller’s resource row exists (for message-level writes)', async () => {
 			// resourceId on the thread is preserved, but messages saved afterwards
 			// carry the current user's resourceId — that row must exist.
-			const existing = {
-				id: 'thread-1',
-				resourceId: 'original-user',
-				title: null,
-				metadata: null,
-			} as unknown as AgentThreadEntity;
-			threadRepository.findOneBy.mockResolvedValue(existing);
-			threadRepository.save.mockImplementation(async (e) => e as AgentThreadEntity);
+			lockedRow({ title: null, metadata: null });
 
 			await memory.saveThread({
 				id: 'thread-1',
@@ -334,21 +335,14 @@ describe('N8nMemory', () => {
 			expect(resourceInsertQueryBuilder.orIgnore).toHaveBeenCalled();
 		});
 
-		it('merges metadata updates instead of replacing existing thread metadata', async () => {
+		it('merges metadata updates into the locked row instead of replacing it', async () => {
 			const currentMessageContext = {
 				integrationConnectionId: 'slack:cred-1',
 				platform: 'slack',
 				target: { type: 'thread', threadId: 'thread-1' },
 				updatedAt: '2026-05-18T10:00:00.000Z',
 			};
-			const existing = {
-				id: 'thread-1',
-				resourceId: 'original-user',
-				title: null,
-				metadata: JSON.stringify({ currentMessageContext }),
-			} as unknown as AgentThreadEntity;
-			threadRepository.findOneBy.mockResolvedValue(existing);
-			threadRepository.save.mockImplementation(async (e) => e as AgentThreadEntity);
+			const row = lockedRow({ title: null, metadata: JSON.stringify({ currentMessageContext }) });
 
 			await memory.saveThread({
 				id: 'thread-1',
@@ -357,25 +351,50 @@ describe('N8nMemory', () => {
 				metadata: { summary: 'Support thread' },
 			});
 
-			expect(threadRepository.save).toHaveBeenCalledWith(
-				expect.objectContaining({ metadata: expect.any(String) }),
-			);
-			const savedThread = threadRepository.save.mock.calls[0][0] as AgentThreadEntity;
-			expect(JSON.parse(savedThread.metadata ?? '{}')).toEqual({
+			expect(JSON.parse(row.metadata ?? '{}')).toEqual({
 				currentMessageContext,
 				summary: 'Support thread',
 			});
+		});
+
+		it('writes nothing when the save carries no title or metadata', async () => {
+			lockedRow({ title: 'Chat', metadata: null });
+
+			await memory.saveThread({ id: 'thread-1', resourceId: 'original-user' });
+
+			const update = threadRepository.patchThread.mock.calls[0][1];
+			expect(update({ title: 'Chat', metadata: '{"a":1}' } as AgentThreadEntity)).toBeNull();
+		});
+	});
+
+	describe('saveThread — new row', () => {
+		it('creates the thread when no row exists', async () => {
+			threadRepository.patchThread.mockResolvedValue(null);
+			threadRepository.create.mockImplementation((e) => e as AgentThreadEntity);
+			threadRepository.save.mockImplementation(async (e) => e as AgentThreadEntity);
+
+			await memory.saveThread({
+				id: 'thread-1',
+				resourceId: 'user-1',
+				title: 'Chat',
+				metadata: { keep: 1 },
+			});
+
+			expect(threadRepository.save).toHaveBeenCalledWith(
+				expect.objectContaining({
+					id: 'thread-1',
+					resourceId: 'user-1',
+					title: 'Chat',
+					metadata: JSON.stringify({ keep: 1 }),
+				}),
+			);
 		});
 	});
 
 	describe('patchThread', () => {
 		let writes: number;
 
-		/**
-		 * A row store behind the repository double. The read and the write are
-		 * separate async steps, so overlapping patches without the queue would
-		 * read the same row and lose an update.
-		 */
+		/** A row store behind the repository double that counts writes. */
 		function seedThread(metadata: Record<string, unknown> | null) {
 			writes = 0;
 			const row = {
@@ -384,15 +403,12 @@ describe('N8nMemory', () => {
 				title: 'Chat',
 				metadata: metadata ? JSON.stringify(metadata) : null,
 			} as AgentThreadEntity;
-			threadRepository.patchMetadata.mockImplementation(async (threadId, update) => {
+			threadRepository.patchThread.mockImplementation(async (threadId, update) => {
 				if (threadId !== row.id) return null;
-				const read = { ...row } as AgentThreadEntity;
-				await new Promise((resolve) => setImmediate(resolve));
-				const patch = update(read);
-				if (!patch) return read;
-				if (patch.title !== undefined) read.title = patch.title;
-				if (patch.metadata !== undefined) read.metadata = patch.metadata;
-				Object.assign(row, read);
+				const patch = update(row);
+				if (!patch) return { ...row };
+				if (patch.title !== undefined) row.title = patch.title;
+				if (patch.metadata !== undefined) row.metadata = patch.metadata;
 				writes++;
 				return { ...row } as AgentThreadEntity;
 			});
@@ -431,21 +447,6 @@ describe('N8nMemory', () => {
 			expect(row.metadata).toBe('{}');
 		});
 
-		it('hands the update a copy of the metadata', async () => {
-			seedThread({ count: 1 });
-
-			const result = await memory.patchThread({
-				threadId: 'thread-1',
-				update: (thread) => {
-					thread.metadata!.count = 99;
-					return null;
-				},
-			});
-
-			expect(result?.metadata).toEqual({ count: 1 });
-			expect(writes).toBe(0);
-		});
-
 		it('returns the current thread without a write when the update returns null', async () => {
 			seedThread({ count: 1 });
 
@@ -464,15 +465,28 @@ describe('N8nMemory', () => {
 			expect(writes).toBe(0);
 		});
 
-		it('passes a root operation context to the repository', async () => {
+		it('passes a root operation context to the repository by default', async () => {
 			seedThread({});
 
 			await memory.patchThread({ threadId: 'thread-1', update: () => null });
 
-			expect(threadRepository.patchMetadata).toHaveBeenCalledWith(
+			expect(threadRepository.patchThread).toHaveBeenCalledWith(
 				'thread-1',
 				expect.any(Function),
 				{},
+			);
+		});
+
+		it("passes the caller's operation context to the repository", async () => {
+			seedThread({});
+			const ctx: OperationContext = { trx: mock<Transaction>() };
+
+			await memory.patchThread({ threadId: 'thread-1', update: () => null }, ctx);
+
+			expect(threadRepository.patchThread).toHaveBeenCalledWith(
+				'thread-1',
+				expect.any(Function),
+				ctx,
 			);
 		});
 	});

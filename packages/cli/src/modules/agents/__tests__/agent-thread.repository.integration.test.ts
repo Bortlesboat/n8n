@@ -40,11 +40,11 @@ describe('AgentThreadRepository', () => {
 		return jsonParse(row.metadata ?? 'null');
 	}
 
-	describe('patchMetadata', () => {
+	describe('patchThread', () => {
 		it('replaces the metadata, so a patch can remove keys', async () => {
 			await seedThread({ keep: 1, drop: 2 });
 
-			const saved = await repository.patchMetadata(
+			const saved = await repository.patchThread(
 				'thread-1',
 				() => ({ title: 'Renamed', metadata: JSON.stringify({ keep: 1 }) }),
 				{},
@@ -57,7 +57,7 @@ describe('AgentThreadRepository', () => {
 		it('writes nothing when the update returns null', async () => {
 			const seeded = await seedThread({ count: 1 });
 
-			const result = await repository.patchMetadata('thread-1', () => null, {});
+			const result = await repository.patchThread('thread-1', () => null, {});
 
 			expect(result).toMatchObject({ id: 'thread-1', title: 'Chat' });
 			const row = await repository.findOneByOrFail({ id: 'thread-1' });
@@ -68,7 +68,7 @@ describe('AgentThreadRepository', () => {
 		it('returns null for a missing thread without calling the update', async () => {
 			const update = vi.fn();
 
-			await expect(repository.patchMetadata('missing', update, {})).resolves.toBeNull();
+			await expect(repository.patchThread('missing', update, {})).resolves.toBeNull();
 			expect(update).not.toHaveBeenCalled();
 		});
 
@@ -79,7 +79,7 @@ describe('AgentThreadRepository', () => {
 			// lock makes each patch wait for the previous commit. SQLite
 			// serializes the two transactions through the write connection.
 			const increment = async () =>
-				await repository.patchMetadata(
+				await repository.patchThread(
 					'thread-1',
 					(row) => {
 						const metadata = jsonParse<{ count: number }>(row.metadata ?? '{}');

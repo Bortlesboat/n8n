@@ -28,7 +28,7 @@ export class AgentThreadRepository extends BaseRepository<AgentThreadEntity> {
 	 * returns `null` or `undefined`, nothing is written and the row is returned
 	 * as it is. Returns `null` when the thread does not exist.
 	 */
-	async patchMetadata(
+	async patchThread(
 		threadId: string,
 		update: (row: Readonly<AgentThreadEntity>) => AgentThreadRowPatch | null | undefined,
 		ctx: OperationContext,
