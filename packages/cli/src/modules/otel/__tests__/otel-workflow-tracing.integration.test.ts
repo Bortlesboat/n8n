@@ -13,6 +13,7 @@ import {
 	initOtelTestEnvironment,
 	terminateOtelTestEnvironment,
 	executeWorkflow,
+	executeWorkflowOnWorker,
 	waitForExecution,
 	waitForExecutionStatus,
 	saveAndSetEnv,
@@ -153,6 +154,25 @@ describe('OTEL Workflow Tracing Integration', () => {
 		const [, resumedTraceId, resumedSpanId] = resumedContext!.traceparent.split('-');
 		expect(resumedTraceId).toBe(parkedTraceId);
 		expect(resumedSpanId).not.toBe(parkedSpanId);
+	});
+
+	it('should add the execution identity to worker node spans when the worker starts its own trace', async () => {
+		const project = await createTeamProject('Finance');
+		const workflow = await createWorkflow(createMultiNodeWorkflowFixture(), project);
+
+		const executionId = await executeWorkflowOnWorker(workflow, project.id);
+
+		const nodeSpans = otel.getFinishedSpans().filter((s) => s.name === 'node.execute');
+		expect(nodeSpans).toHaveLength(workflow.nodes.length);
+		for (const span of nodeSpans) {
+			expect(span.attributes).toMatchObject({
+				'n8n.execution.id': executionId,
+				'n8n.workflow.id': workflow.id,
+				'n8n.workflow.name': workflow.name,
+				'n8n.project.id': project.id,
+				'n8n.project.name': 'Finance',
+			});
+		}
 	});
 
 	it('should inherit traceId from inbound HTTP traceparent', async () => {

@@ -130,6 +130,34 @@ describe('OtelLifecycleHandler', () => {
 			);
 		});
 
+		it('should pass the project name to the tracer for a team project', async () => {
+			traceContextService.get.mockResolvedValueOnce(undefined);
+			ownershipService.getWorkflowProjectCached.mockResolvedValueOnce({
+				id: 'proj-1',
+				name: 'Finance',
+				type: 'team',
+			} as never);
+
+			await handler.onWorkflowStart(baseCtx);
+
+			expect(tracer.startWorkflow).toHaveBeenCalledWith(
+				expect.objectContaining({ project: expect.objectContaining({ name: 'Finance' }) }),
+			);
+		});
+
+		it('should not pass the project name to the tracer for a personal project', async () => {
+			traceContextService.get.mockResolvedValueOnce(undefined);
+			ownershipService.getWorkflowProjectCached.mockResolvedValueOnce({
+				id: 'proj-1',
+				name: 'Jane Doe <jane@example.com>',
+				type: 'personal',
+			} as never);
+
+			await handler.onWorkflowStart(baseCtx);
+
+			expect(tracer.startWorkflow.mock.calls[0][0].project?.name).toBeUndefined();
+		});
+
 		it('should pass project customAttributes to the tracer when project has telemetry tags', async () => {
 			traceContextService.get.mockResolvedValueOnce(undefined);
 			ownershipService.getWorkflowProjectCached.mockResolvedValueOnce({
@@ -224,6 +252,24 @@ describe('OtelLifecycleHandler', () => {
 			);
 		});
 
+		it('should pass the saved identity of the execution itself to the tracer', async () => {
+			const identity = {
+				'n8n.execution.id': 'exec-sub',
+				'n8n.workflow.id': 'wf-1',
+				'n8n.workflow.name': 'Before',
+			};
+			traceContextService.get.mockResolvedValueOnce({
+				traceparent: '00-bbbb651916cd43dd8448eb211c80319c-bbbb67aa0ba902b7-01',
+				identity,
+			});
+
+			await handler.onWorkflowStart(baseCtx);
+
+			expect(tracer.startWorkflow).toHaveBeenCalledWith(
+				expect.objectContaining({ savedIdentity: identity }),
+			);
+		});
+
 		it('should inherit parent tracingContext for sub-workflows', async () => {
 			traceContextService.get.mockResolvedValueOnce(parentTracingContext);
 
@@ -241,6 +287,22 @@ describe('OtelLifecycleHandler', () => {
 			expect(tracer.startWorkflow).toHaveBeenCalledWith(
 				expect.objectContaining({ tracingContext: parentTracingContext }),
 			);
+		});
+
+		it('should not pass the saved identity of the parent to the tracer for sub-workflows', async () => {
+			traceContextService.get.mockResolvedValueOnce({
+				...parentTracingContext,
+				identity: { 'n8n.execution.id': 'exec-parent', 'n8n.workflow.id': 'wf-parent' },
+			});
+
+			await handler.onWorkflowStart({
+				...baseCtx,
+				executionData: {
+					parentExecution: { executionId: 'exec-parent', workflowId: 'wf-parent' },
+				} as IRunExecutionData,
+			});
+
+			expect(tracer.startWorkflow.mock.calls[0][0].savedIdentity).toBeUndefined();
 		});
 
 		it('should inherit parent tracingContext for error workflows, linking the span to the failed execution', async () => {
@@ -556,6 +618,27 @@ describe('OtelLifecycleHandler', () => {
 				}),
 			);
 			expect(traceContextService.persist).toHaveBeenCalledWith('exec-resume', resumedSpanContext);
+		});
+
+		it('should pass the saved identity to the tracer on resume', async () => {
+			const identity = {
+				'n8n.execution.id': 'exec-resume',
+				'n8n.workflow.id': 'wf-1',
+				'n8n.workflow.name': 'Before',
+			};
+			traceContextService.get.mockResolvedValueOnce({ ...prePauseContext, identity });
+
+			await handler.onWorkflowResume({
+				type: 'workflowExecuteResume',
+				workflow: { id: 'wf-1', name: 'After', versionId: 'v1', nodes: [], connections: {} },
+				workflowInstance: createWorkflowInstance(),
+				executionData: undefined as never,
+				executionId: 'exec-resume',
+			} as never);
+
+			expect(tracer.startWorkflow).toHaveBeenCalledWith(
+				expect.objectContaining({ savedIdentity: identity }),
+			);
 		});
 
 		it('should start a root span when no pre-wait context is persisted', async () => {

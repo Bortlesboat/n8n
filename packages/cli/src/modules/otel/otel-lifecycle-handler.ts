@@ -1,5 +1,6 @@
 import { LicenseState, Logger } from '@n8n/backend-common';
 import { EventService } from '@n8n/backend-services';
+import type { Project } from '@n8n/db';
 import { OnLifecycleEvent, OnPubSubEvent } from '@n8n/decorators';
 import type {
 	WorkflowExecuteBeforeContext,
@@ -13,8 +14,9 @@ import type { ICustomTelemetryTag, WorkflowExecuteMode } from 'n8n-workflow';
 
 import type { RelayEventMap } from '@/events/maps/relay.event-map';
 
+import { toExecutionIdentity } from './execution-identity';
 import { ExecutionLevelTracer } from './execution-level-tracer';
-import type { CustomAttributes } from './execution-level-tracer.types';
+import type { CustomAttributes, ProjectContext } from './execution-level-tracer.types';
 import { OtelSettingsService } from './otel-settings.service';
 import { OtelService } from './otel.service';
 import { TraceContextService } from './tracing-context';
@@ -99,12 +101,9 @@ export class OtelLifecycleHandler {
 		const spanContext = this.tracer.startWorkflow({
 			executionId: ctx.executionId,
 			tracingContext,
-			project: project
-				? {
-						id: project.id,
-						customAttributes: this.buildProjectCustomAttributes(project.customTelemetryTags),
-					}
-				: undefined,
+			// In queue mode, main runs this hook, not the resume hook, when a waiting execution resumes.
+			savedIdentity: parentExecutionId ? undefined : toExecutionIdentity(tracingContext?.identity),
+			project: this.buildProjectContext(project),
 			workflow: {
 				id: ctx.workflow.id,
 				name: ctx.workflow.name,
@@ -144,12 +143,8 @@ export class OtelLifecycleHandler {
 			// `n8n.continuation.reason`.
 			tracingContext: previousWorkflowExecution,
 			linkTo: previousWorkflowExecution,
-			project: project
-				? {
-						id: project.id,
-						customAttributes: this.buildProjectCustomAttributes(project.customTelemetryTags),
-					}
-				: undefined,
+			savedIdentity: toExecutionIdentity(previousWorkflowExecution?.identity),
+			project: this.buildProjectContext(project),
 			workflow: {
 				id: ctx.workflow.id,
 				name: ctx.workflow.name,
@@ -255,6 +250,17 @@ export class OtelLifecycleHandler {
 		if (Object.keys(customAttributes).length === 0) return;
 
 		return customAttributes;
+	}
+
+	private buildProjectContext(project: Project | undefined): ProjectContext | undefined {
+		if (!project) return undefined;
+
+		return {
+			id: project.id,
+			// Personal project names hold the owner's name and email.
+			name: project.type === 'team' ? project.name : undefined,
+			customAttributes: this.buildProjectCustomAttributes(project.customTelemetryTags),
+		};
 	}
 
 	private buildProjectCustomAttributes(
