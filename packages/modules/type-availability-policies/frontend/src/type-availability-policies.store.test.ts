@@ -1,4 +1,4 @@
-import type { AvailableTypesResponse } from '@n8n/api-types';
+import type { AvailableCredentialTypesResponse, AvailableTypesResponse } from '@n8n/api-types';
 import { createDeferredPromise } from '@n8n/utils/promise/deferred-promise';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
@@ -6,11 +6,13 @@ import { useTypeAvailabilityPoliciesStore } from './type-availability-policies.s
 
 const mocks = vi.hoisted(() => ({
 	fetchAvailableTypes: vi.fn(),
+	fetchAvailableCredentialTypes: vi.fn(),
 	isModuleActive: vi.fn(),
 }));
 
 vi.mock('./type-availability-policies.api', () => ({
 	fetchAvailableTypes: mocks.fetchAvailableTypes,
+	fetchAvailableCredentialTypes: mocks.fetchAvailableCredentialTypes,
 }));
 
 vi.mock('@n8n/stores/settings.store', () => ({
@@ -37,11 +39,20 @@ const PROJECT_B_RESPONSE: AvailableTypesResponse = [
 	{ name: RESTRICTED, available: true },
 ];
 
+const ALLOWED_CREDENTIAL = 'slackApi';
+const RESTRICTED_CREDENTIAL = 'anthropicApi';
+
+const PROJECT_A_CREDENTIAL_RESPONSE: AvailableCredentialTypesResponse = [
+	{ name: ALLOWED_CREDENTIAL, available: true },
+	{ name: RESTRICTED_CREDENTIAL, available: false, scope: 'instance', matchedRuleId: 'rule-2' },
+];
+
 describe('useTypeAvailabilityPoliciesStore', () => {
 	let errorSpy: ReturnType<typeof vi.spyOn>;
 
 	beforeEach(() => {
 		mocks.fetchAvailableTypes.mockReset();
+		mocks.fetchAvailableCredentialTypes.mockReset().mockResolvedValue([]);
 		mocks.isModuleActive.mockReset().mockReturnValue(true);
 		errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 	});
@@ -62,6 +73,7 @@ describe('useTypeAvailabilityPoliciesStore', () => {
 
 			expect(store.isEnabled).toBe(false);
 			expect(mocks.fetchAvailableTypes).not.toHaveBeenCalled();
+			expect(mocks.fetchAvailableCredentialTypes).not.toHaveBeenCalled();
 			expect(store.getNodeTypeAvailability(RESTRICTED)).toEqual({
 				name: RESTRICTED,
 				available: true,
@@ -81,6 +93,7 @@ describe('useTypeAvailabilityPoliciesStore', () => {
 
 			expect(store.isEnabled).toBe(false);
 			expect(mocks.fetchAvailableTypes).not.toHaveBeenCalled();
+			expect(mocks.fetchAvailableCredentialTypes).not.toHaveBeenCalled();
 			expect(store.isNodeTypeAvailable(RESTRICTED)).toBe(true);
 		});
 	});
@@ -114,6 +127,65 @@ describe('useTypeAvailabilityPoliciesStore', () => {
 
 			expect(store.getNodeTypeAvailability(ALLOWED)).toEqual({ name: ALLOWED, available: true });
 			expect(store.getNodeTypeAvailability(UNKNOWN)).toEqual({ name: UNKNOWN, available: true });
+		});
+
+		it('loads credential type availability for the same project', async () => {
+			mocks.fetchAvailableTypes.mockResolvedValue(PROJECT_A_RESPONSE);
+			mocks.fetchAvailableCredentialTypes.mockResolvedValue(PROJECT_A_CREDENTIAL_RESPONSE);
+			const store = useTypeAvailabilityPoliciesStore();
+
+			await store.fetchForProject('project-a');
+
+			expect(mocks.fetchAvailableCredentialTypes).toHaveBeenCalledWith(
+				expect.objectContaining({ baseUrl: 'http://localhost' }),
+				'project-a',
+			);
+			expect(store.getCredentialTypeAvailability(RESTRICTED_CREDENTIAL)).toEqual({
+				name: RESTRICTED_CREDENTIAL,
+				available: false,
+				scope: 'instance',
+				matchedRuleId: 'rule-2',
+			});
+			expect(store.getCredentialTypeAvailability(ALLOWED_CREDENTIAL)).toEqual({
+				name: ALLOWED_CREDENTIAL,
+				available: true,
+			});
+			expect(store.getCredentialTypeAvailability(UNKNOWN)).toEqual({
+				name: UNKNOWN,
+				available: true,
+			});
+		});
+
+		it('reports every credential type as available while a project switch is in flight', async () => {
+			const deferred = createDeferredPromise<AvailableTypesResponse>();
+			mocks.fetchAvailableTypes
+				.mockResolvedValueOnce(PROJECT_A_RESPONSE)
+				.mockReturnValueOnce(deferred.promise);
+			mocks.fetchAvailableCredentialTypes.mockResolvedValue(PROJECT_A_CREDENTIAL_RESPONSE);
+			const store = useTypeAvailabilityPoliciesStore();
+
+			await store.fetchForProject('project-a');
+			const switching = store.fetchForProject('project-b');
+
+			expect(store.getCredentialTypeAvailability(RESTRICTED_CREDENTIAL).available).toBe(true);
+
+			deferred.resolve(PROJECT_B_RESPONSE);
+			await switching;
+
+			expect(store.getCredentialTypeAvailability(RESTRICTED_CREDENTIAL).available).toBe(false);
+		});
+
+		it('degrades both kinds to available and logs once when the credential request fails', async () => {
+			mocks.fetchAvailableTypes.mockResolvedValue(PROJECT_A_RESPONSE);
+			mocks.fetchAvailableCredentialTypes.mockRejectedValue(new Error('endpoint failure'));
+			const store = useTypeAvailabilityPoliciesStore();
+
+			await store.fetchForProject('project-a');
+
+			expect(errorSpy).toHaveBeenCalledTimes(1);
+			expect(store.loadedProjectId).toBeNull();
+			expect(store.isNodeTypeAvailable(RESTRICTED)).toBe(true);
+			expect(store.getCredentialTypeAvailability(RESTRICTED_CREDENTIAL).available).toBe(true);
 		});
 
 		it('does not refetch the project that is already loaded', async () => {
@@ -283,6 +355,7 @@ describe('useTypeAvailabilityPoliciesStore', () => {
 
 		it('clears all state on reset', async () => {
 			mocks.fetchAvailableTypes.mockResolvedValue(PROJECT_A_RESPONSE);
+			mocks.fetchAvailableCredentialTypes.mockResolvedValue(PROJECT_A_CREDENTIAL_RESPONSE);
 			const store = useTypeAvailabilityPoliciesStore();
 
 			await store.fetchForProject('project-a');
@@ -290,6 +363,7 @@ describe('useTypeAvailabilityPoliciesStore', () => {
 
 			expect(store.loadedProjectId).toBeNull();
 			expect(store.isNodeTypeAvailable(RESTRICTED)).toBe(true);
+			expect(store.getCredentialTypeAvailability(RESTRICTED_CREDENTIAL).available).toBe(true);
 		});
 	});
 });
